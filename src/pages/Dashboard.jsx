@@ -246,8 +246,11 @@ export default function Dashboard() {
     lowStockItems.length
 
   return (
-    <main className="min-h-full bg-gray-50 px-4 py-8 sm:px-8 sm:py-10">
-      <div className="mx-auto max-w-7xl">
+    <main className="relative isolate min-h-full overflow-hidden bg-gray-50 px-4 py-8 sm:px-8 sm:py-10">
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center">
+        <img alt="" className="h-auto w-[min(70vw,560px)] object-contain opacity-5" src="/logo.jpeg" />
+      </div>
+      <div className="relative z-10 mx-auto max-w-7xl">
         <section className="relative isolate overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-blue-950 to-blue-800 px-6 py-7 text-white shadow-xl shadow-blue-950/15 sm:px-9 sm:py-9">
           <div aria-hidden="true" className="absolute -right-14 -top-20 -z-10 h-72 w-72 rounded-full bg-cyan-300/20 blur-3xl" />
           <div aria-hidden="true" className="absolute bottom-[-8rem] right-1/4 -z-10 h-64 w-64 rounded-full bg-indigo-400/20 blur-3xl" />

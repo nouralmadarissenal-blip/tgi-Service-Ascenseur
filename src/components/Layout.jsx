@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import {
   Boxes,
-  Building2,
   ClipboardList,
   FileCheck2,
   FileText,
@@ -16,6 +15,7 @@ import {
 } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import Footer from './Footer'
 
 const navigation = [
   { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
@@ -45,12 +45,14 @@ export default function Layout() {
   const sidebar = (
     <div className="flex h-full flex-col bg-slate-950 text-slate-300">
       <div className="flex h-19 items-center gap-3 border-b border-white/10 px-5">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500 text-white shadow-lg shadow-blue-950/40">
-          <Building2 aria-hidden="true" size={21} />
-        </div>
+        <img
+          alt="TGI Ascenseurs"
+          className="h-12 w-12 shrink-0 rounded-lg object-cover shadow-lg shadow-blue-950/30 transition-transform duration-200 hover:scale-105"
+          src="/logo.jpeg"
+        />
         <div className="min-w-0">
-          <p className="truncate text-sm font-bold tracking-wide text-white">TGI Manager</p>
-          <p className="text-[11px] text-slate-400">Ascenseurs · Pro</p>
+          <p className="truncate text-sm font-bold tracking-wide text-white">Manager Pro</p>
+          <p className="text-[11px] text-slate-400">Espace de gestion</p>
         </div>
         <button
           aria-label="Fermer le menu"
@@ -126,7 +128,7 @@ export default function Layout() {
         </div>
       )}
 
-      <div className="min-h-screen lg:pl-64.5">
+      <div className="flex min-h-screen flex-col lg:pl-64.5">
         <header className="sticky top-0 z-20 flex h-17 items-center gap-3 border-b border-slate-200 bg-white/90 px-4 backdrop-blur sm:px-7 lg:hidden">
           <button
             aria-label="Ouvrir le menu"
@@ -136,9 +138,12 @@ export default function Layout() {
           >
             <Menu size={20} />
           </button>
-          <span className="text-sm font-bold text-slate-900">TGI Manager Pro</span>
+          <img alt="TGI Ascenseurs · Manager Pro" className="h-10 w-auto object-contain transition-transform duration-200 hover:scale-105" src="/logo.jpeg" />
         </header>
-        <Outlet />
+        <div className="flex-1">
+          <Outlet />
+        </div>
+        <Footer className="sm:px-7" />
       </div>
     </div>
   )

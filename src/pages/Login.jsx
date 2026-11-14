@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { ArrowRight, Building2, Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react'
+import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import Footer from '../components/Footer'
 
 export default function Login() {
   const { authError, login } = useAuth()
@@ -34,27 +35,24 @@ export default function Login() {
   }
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-50 px-4 py-10 sm:px-6">
+    <main className="relative flex min-h-screen flex-col overflow-hidden bg-slate-50 px-4 sm:px-6">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_rgba(30,58,138,0.10),_transparent_45%)]"
       />
-      <div className="relative grid w-full max-w-5xl overflow-hidden rounded-3xl bg-white shadow-2xl shadow-slate-900/10 ring-1 ring-slate-200 lg:min-h-[620px] lg:grid-cols-[1.05fr_0.95fr]">
+      <div className="relative flex flex-1 items-center justify-center py-10">
+        <div className="grid w-full max-w-5xl overflow-hidden rounded-3xl bg-white shadow-2xl shadow-slate-900/10 ring-1 ring-slate-200 lg:min-h-[620px] lg:grid-cols-[1.05fr_0.95fr]">
         <section className="relative hidden flex-col justify-between overflow-hidden bg-brand-800 p-12 text-white lg:flex">
           <div
             aria-hidden="true"
             className="absolute inset-0 bg-[radial-gradient(circle_at_80%_15%,_rgba(96,165,250,0.35),_transparent_35%),linear-gradient(145deg,_transparent_35%,_rgba(15,23,42,0.5))]"
           />
-          <div className="relative flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/20">
-              <Building2 aria-hidden="true" size={25} />
-            </div>
-            <div>
-              <p className="text-sm font-semibold tracking-[0.18em] text-blue-100">
-                TGI ASCENSEURS
-              </p>
-              <p className="mt-0.5 text-xs text-blue-200/75">Gestion professionnelle</p>
-            </div>
+          <div className="relative">
+            <img
+              alt="TGI Ascenseurs"
+              className="h-16 w-16 rounded-xl object-cover shadow-xl shadow-slate-950/30"
+              src="/logo.jpeg"
+            />
           </div>
 
           <div className="relative max-w-md">
@@ -81,14 +79,12 @@ export default function Login() {
 
         <section className="flex items-center justify-center px-6 py-12 sm:px-12 lg:px-14">
           <div className="w-full max-w-sm">
-            <div className="mb-10 flex items-center gap-3 lg:hidden">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-800 text-white">
-                <Building2 aria-hidden="true" size={23} />
-              </div>
-              <div>
-                <p className="text-sm font-bold tracking-wider text-slate-900">TGI ASCENSEURS</p>
-                <p className="text-xs text-slate-500">TGI Manager Pro</p>
-              </div>
+            <div className="mb-8 flex justify-center">
+              <img
+                alt="TGI Ascenseurs"
+                className="h-24 w-auto rounded-2xl object-contain drop-shadow-lg"
+                src="/logo.jpeg"
+              />
             </div>
 
             <div>
@@ -183,7 +179,9 @@ export default function Login() {
             </p>
           </div>
         </section>
+        </div>
       </div>
+      <Footer className="relative z-10 -mx-4 sm:-mx-6" />
     </main>
   )
 }

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
+import Footer from './components/Footer'
 import Login from './pages/Login'
 
 const Layout = lazy(() => import('./components/Layout'))
@@ -40,24 +41,27 @@ function AccessDenied() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-      <section className="w-full max-w-md rounded-2xl bg-white p-8 text-center shadow-xl shadow-slate-900/5 ring-1 ring-slate-200">
-        <h1 className="text-2xl font-semibold text-slate-900">Accès non autorisé</h1>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          {role
-            ? 'Votre rôle ne permet pas d’accéder à cette page.'
-            : 'Aucun rôle autorisé n’est associé à ce compte.'}
-        </p>
-        {authError && <p className="mt-3 text-sm text-red-700" role="alert">{authError}</p>}
-        {logoutError && <p className="mt-3 text-sm text-red-700" role="alert">{logoutError}</p>}
-        <button
-          className="mt-6 rounded-lg bg-blue-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-900"
-          onClick={() => void handleLogout()}
-          type="button"
-        >
-          Se déconnecter
-        </button>
-      </section>
+    <main className="flex min-h-screen flex-col bg-slate-50 px-4">
+      <div className="flex flex-1 items-center justify-center py-10">
+        <section className="w-full max-w-md rounded-2xl bg-white p-8 text-center shadow-xl shadow-slate-900/5 ring-1 ring-slate-200">
+          <h1 className="text-2xl font-semibold text-slate-900">Accès non autorisé</h1>
+          <p className="mt-3 text-sm leading-6 text-slate-600">
+            {role
+              ? 'Votre rôle ne permet pas d’accéder à cette page.'
+              : 'Aucun rôle autorisé n’est associé à ce compte.'}
+          </p>
+          {authError && <p className="mt-3 text-sm text-red-700" role="alert">{authError}</p>}
+          {logoutError && <p className="mt-3 text-sm text-red-700" role="alert">{logoutError}</p>}
+          <button
+            className="mt-6 rounded-lg bg-blue-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-900"
+            onClick={() => void handleLogout()}
+            type="button"
+          >
+            Se déconnecter
+          </button>
+        </section>
+      </div>
+      <Footer className="-mx-4" />
     </main>
   )
 }
