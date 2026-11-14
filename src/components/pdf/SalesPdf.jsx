@@ -29,6 +29,13 @@ function formatDate(value) {
 
 const SalesPdf = forwardRef(function SalesPdf({ client = {}, company = {}, documentData = {} }, ref) {
   const items = Array.isArray(documentData.items) ? documentData.items : []
+  const taxBreakdown = Array.isArray(documentData.taxBreakdown)
+    ? documentData.taxBreakdown.filter((row) =>
+        Number.isFinite(Number(row.taxRate)) &&
+        Number.isFinite(Number(row.totalTax)) &&
+        Number.isFinite(Number(row.totalHT)),
+      )
+    : []
   const summaryNeedsNewPage = items.length > 10
   const title = DOCUMENT_TITLES[documentData.type] || 'DOCUMENT COMMERCIAL'
   const companyDetails = [
@@ -163,6 +170,16 @@ const SalesPdf = forwardRef(function SalesPdf({ client = {}, company = {}, docum
               <th style={{ padding: '2.5mm 3mm', color: '#475569', textAlign: 'left' }}>Total HT</th>
               <td style={{ padding: '2.5mm 3mm', textAlign: 'right' }}>{formatCurrency(documentData.totalHT, company.defaultCurrency)}</td>
             </tr>
+            {taxBreakdown.map((row) => (
+              <tr key={`vat-${row.taxRate}`} style={{ borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: '8pt' }}>
+                <th style={{ padding: '2mm 3mm', textAlign: 'left' }}>
+                  TVA {Number(row.taxRate)} % · base {formatCurrency(row.totalHT, company.defaultCurrency)}
+                </th>
+                <td style={{ padding: '2mm 3mm', textAlign: 'right' }}>
+                  {formatCurrency(row.totalTax, company.defaultCurrency)}
+                </td>
+              </tr>
+            ))}
             <tr style={{ borderBottom: '1px solid #cbd5e1' }}>
               <th style={{ padding: '2.5mm 3mm', color: '#475569', textAlign: 'left' }}>Total TVA</th>
               <td style={{ padding: '2.5mm 3mm', textAlign: 'right' }}>{formatCurrency(documentData.totalTax, company.defaultCurrency)}</td>

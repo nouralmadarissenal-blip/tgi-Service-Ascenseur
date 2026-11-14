@@ -1,8 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, FilePlus2, FileText, PackageCheck, Plus, Printer, Search, Trash2 } from 'lucide-react'
+import {
+  AlertCircle,
+  CheckCircle2,
+  Copy,
+  FileDown,
+  FilePlus2,
+  FileText,
+  LoaderCircle,
+  PackageCheck,
+  Pencil,
+  Search,
+  ShieldAlert,
+} from 'lucide-react'
 import {
   collection,
   doc,
+  getDoc,
   onSnapshot,
   runTransaction,
   serverTimestamp,
@@ -10,8 +23,11 @@ import {
 import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
 import EmptyState from '../components/common/EmptyState'
+import DataTableExportToolbar from '../components/common/DataTableExportToolbar'
 import DataTablePagination from '../components/common/DataTablePagination'
+import SortableTableHeader from '../components/common/SortableTableHeader'
 import TableSkeleton from '../components/common/TableSkeleton'
+import SalesDocumentForm from '../components/sales/SalesDocumentForm'
 import SalesPdf from '../components/pdf/SalesPdf'
 import useDataTable from '../hooks/useDataTable'
 import useFirestoreCollection from '../hooks/useFirestoreCollection'
@@ -23,10 +39,11 @@ const DOCUMENT_OPTIONS = [
   { value: 'deliveryNote', label: 'Bon de livraison', prefix: 'BL', prefixField: 'deliveryNotePrefix' },
   { value: 'invoice', label: 'Facture', prefix: 'FAC', prefixField: 'invoicePrefix' },
 ]
-const supportedCurrencies = ['MAD', 'EUR', 'USD']
+const SUPPORTED_CURRENCIES = ['MAD', 'EUR', 'USD']
 const VAT_OPTIONS = [20, 14, 0]
+const DOCUMENT_STATUSES = ['Brouillon', 'Validé', 'Annulé']
 const inputClass =
-  'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100'
+  'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition focus:border-steel-500 focus:ring-4 focus:ring-steel-100'
 
 function localDate(offsetDays = 0) {
   const date = new Date()
@@ -35,11 +52,32 @@ function localDate(offsetDays = 0) {
 }
 
 function addMonthsToDate(value, months) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return localDate(months * 30)
   const [year, month, day] = value.split('-').map(Number)
   const targetMonth = new Date(year, month - 1 + months, 1)
   const lastDay = new Date(targetMonth.getFullYear(), targetMonth.getMonth() + 1, 0).getDate()
   targetMonth.setDate(Math.min(day, lastDay))
   return `${targetMonth.getFullYear()}-${String(targetMonth.getMonth() + 1).padStart(2, '0')}-${String(targetMonth.getDate()).padStart(2, '0')}`
+}
+
+function dateInputValue(value, fallback = '') {
+  if (value && typeof value.toDate === 'function') {
+    const date = value.toDate()
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  }
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+  }
+  return /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : fallback
+}
+
+function isValidDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(year, month - 1, day)
+  return date.getFullYear() === year &&
+    date.getMonth() === month - 1 &&
+    date.getDate() === day
 }
 
 function createEmptyForm(company = {}) {
@@ -55,7 +93,7 @@ function createEmptyForm(company = {}) {
     dueDate: addMonthsToDate(issueDate, Number(company.defaultQuoteValidityMonths) || 3),
     notes: '',
     generalConditions: company.defaultTermsAndConditions || '',
-    items: [{ stockId: '', quantity: '1', taxRate: String(vatRate) }],
+    items: [{ stockId: '', reference: '', designation: '', unitPrice: '', quantity: '1', taxRate: String(vatRate) }],
   }
 }
 
@@ -64,7 +102,7 @@ function formatCurrency(value, currency = 'MAD') {
   if (!Number.isFinite(amount)) return '—'
   return new Intl.NumberFormat('fr-MA', {
     style: 'currency',
-    currency: supportedCurrencies.includes(currency) ? currency : 'MAD',
+    currency: SUPPORTED_CURRENCIES.includes(currency) ? currency : 'MAD',
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(amount)
@@ -85,9 +123,10 @@ function tryCalculateLineAmounts(unitPrice, quantity, taxRate) {
   const count = Number(quantity)
   const rate = Number(taxRate)
   if (
+    unitPrice === '' ||
     !Number.isFinite(price) ||
     price < 0 ||
-    !Number.isInteger(count) ||
+    !Number.isSafeInteger(count) ||
     count <= 0 ||
     !Number.isFinite(rate) ||
     rate < 0 ||
@@ -95,22 +134,105 @@ function tryCalculateLineAmounts(unitPrice, quantity, taxRate) {
   ) {
     return null
   }
-  const priceCents = Math.round(price * 100)
-  const baseCents = priceCents * count
-  if (
-    !Number.isSafeInteger(priceCents) ||
-    !Number.isSafeInteger(baseCents) ||
-    !Number.isSafeInteger(baseCents * Math.round(rate * 100))
-  ) {
-    return null
+  try {
+    return calculateLineAmounts(price, count, rate)
+  } catch (calculationError) {
+    if (calculationError instanceof RangeError || calculationError instanceof TypeError) return null
+    throw calculationError
   }
-  return calculateLineAmounts(price, count, rate)
 }
 
-function formatDate(value) {
-  if (!value) return '—'
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('fr-FR')
+function getLinePreviews(items, stockById, type, company) {
+  const requestedByStock = new Map()
+  items.forEach((line) => {
+    if (!line.stockId) return
+    const quantity = Number(line.quantity)
+    if (!Number.isSafeInteger(quantity) || quantity <= 0) return
+    const requested = (requestedByStock.get(line.stockId) || 0) + quantity
+    requestedByStock.set(line.stockId, Number.isSafeInteger(requested) ? requested : Number.POSITIVE_INFINITY)
+  })
+
+  return items.map((line) => {
+    const stockItem = stockById.get(line.stockId)
+    const quantity = Number(line.quantity)
+    const unitPrice = line.unitPrice
+    const taxRate = Number(line.taxRate)
+    let error = ''
+    if (!line.stockId) error = 'Sélectionnez un article.'
+    else if (!stockItem) error = 'Cet article n’est plus disponible.'
+    else if (!String(line.designation || '').trim()) error = 'La désignation est obligatoire.'
+    else if (!Number.isSafeInteger(quantity) || quantity <= 0) error = 'Saisissez une quantité entière positive.'
+    else if (unitPrice === '' || !Number.isFinite(Number(unitPrice)) || Number(unitPrice) < 0) {
+      error = 'Le prix HT doit être un montant valide et positif ou nul.'
+    } else if (!getVatOptions(company).includes(taxRate)) {
+      error = 'Sélectionnez un taux de TVA valide.'
+    }
+
+    const calculated = !error
+      ? tryCalculateLineAmounts(Number(unitPrice), quantity, taxRate)
+      : null
+    if (!error && !calculated) error = 'Le calcul de cette ligne dépasse la précision prise en charge.'
+    const amounts = calculated ? { ...calculated, taxRate } : null
+
+    const rawAvailable = Number(stockItem?.quantity)
+    const availableQuantity = Number.isSafeInteger(rawAvailable) && rawAvailable >= 0
+      ? rawAvailable
+      : null
+    const requestedQuantity = requestedByStock.get(line.stockId) ?? quantity
+    const stockWarning = ['deliveryNote', 'invoice'].includes(type) &&
+      stockItem &&
+      (availableQuantity === null || requestedQuantity > availableQuantity)
+    const stockError = availableQuantity === null
+      ? 'Quantité en stock invalide.'
+      : ''
+
+    return {
+      stockItem,
+      amounts,
+      error,
+      availableQuantity,
+      requestedQuantity,
+      stockWarning,
+      stockError,
+    }
+  })
+}
+
+function calculateTotals(linePreviews) {
+  const validLines = linePreviews
+    .filter((preview) => preview.amounts)
+    .map((preview) => preview.amounts)
+  try {
+    const totals = sumLineAmounts(validLines)
+    const byRate = new Map()
+    linePreviews.forEach((preview) => {
+      if (!preview.amounts) return
+      const rate = Number(preview.amounts.taxRate)
+      const rows = byRate.get(rate) || []
+      rows.push(preview.amounts)
+      byRate.set(rate, rows)
+    })
+    const taxBreakdown = [...byRate.entries()]
+      .sort(([first], [second]) => second - first)
+      .map(([taxRate, rows]) => {
+        const subtotal = sumLineAmounts(rows)
+        return {
+          taxRate,
+          totalHT: subtotal.totalHT,
+          totalTax: subtotal.totalTax,
+        }
+      })
+    return { ...totals, taxBreakdown, error: '' }
+  } catch (calculationError) {
+    if (!(calculationError instanceof RangeError)) throw calculationError
+    return {
+      totalHT: 0,
+      totalTax: 0,
+      totalTTC: 0,
+      taxBreakdown: [],
+      error: 'Le total dépasse la limite de calcul prise en charge. Réduisez les quantités ou les montants.',
+    }
+  }
 }
 
 function getClientName(client) {
@@ -126,15 +248,125 @@ function safeFilename(value) {
     .toLowerCase()
 }
 
+function getPrefix(type, company) {
+  const option = DOCUMENT_OPTIONS.find((item) => item.value === type)
+  if (!option) return 'DOC'
+  const configured = String(company[option.prefixField] || option.prefix)
+    .trim()
+    .replace(/-+$/, '')
+  return configured || option.prefix
+}
+
+function getDocumentStatus(documentData) {
+  const status = String(documentData.status || '').trim().toLowerCase()
+  if (['cancelled', 'canceled', 'annulé', 'annule'].includes(status)) return 'Annulé'
+  if (['draft', 'brouillon'].includes(status)) return 'Brouillon'
+  if (documentData.type === 'deliveryNote') {
+    const delivered = documentData.stockDeducted === true ||
+      ['delivered', 'livré', 'livree', 'livrée'].includes(status) ||
+      (documentData.sourceCollection === 'salesDocuments' && status === 'issued')
+    return delivered ? 'Validé' : 'Brouillon'
+  }
+  return 'Validé'
+}
+
+function isDeliveryValidated(documentData) {
+  const status = String(documentData.status || '').trim().toLowerCase()
+  return documentData.stockDeducted === true ||
+    ['delivered', 'livré', 'livree', 'livrée'].includes(status)
+}
+
+function getStoredTotal(documentData) {
+  const total = Number(documentData.totalTTC)
+  if (
+    documentData.totalTTC !== null &&
+    documentData.totalTTC !== undefined &&
+    documentData.totalTTC !== '' &&
+    Number.isFinite(total) &&
+    total >= 0
+  ) return total
+  const lines = Array.isArray(documentData.items) ? documentData.items : []
+  if (lines.length === 0) return null
+  try {
+    const amounts = lines.map((line) => {
+      if (
+        line.totalHT !== null &&
+        line.totalHT !== undefined &&
+        line.totalHT !== '' &&
+        line.taxAmount !== null &&
+        line.taxAmount !== undefined &&
+        line.taxAmount !== '' &&
+        Number.isFinite(Number(line.totalHT)) &&
+        Number.isFinite(Number(line.taxAmount))
+      ) {
+        return { totalHT: Number(line.totalHT), taxAmount: Number(line.taxAmount) }
+      }
+      return calculateLineAmounts(
+        line.unitPrice,
+        line.quantity,
+        Number(line.taxRate ?? line.vatRate ?? 0),
+      )
+    })
+    return sumLineAmounts(amounts).totalTTC
+  } catch (calculationError) {
+    if (calculationError instanceof RangeError || calculationError instanceof TypeError) return null
+    throw calculationError
+  }
+}
+
+function toCents(value) {
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) throw new TypeError('Un montant numérique valide est requis.')
+  const cents = Math.round((amount + Number.EPSILON) * 100)
+  if (!Number.isSafeInteger(cents)) throw new RangeError('Le montant dépasse la précision prise en charge.')
+  return cents
+}
+
+function buildTaxBreakdown(lines) {
+  const totalsByRate = new Map()
+  for (const line of lines) {
+    const rate = Number(line.taxRate)
+    const current = totalsByRate.get(rate) || { totalHTCents: 0, totalTaxCents: 0 }
+    current.totalHTCents += toCents(line.totalHT)
+    current.totalTaxCents += toCents(line.taxAmount)
+    if (!Number.isSafeInteger(current.totalHTCents) || !Number.isSafeInteger(current.totalTaxCents)) {
+      throw new RangeError('Le détail de TVA dépasse la précision prise en charge.')
+    }
+    totalsByRate.set(rate, current)
+  }
+  return [...totalsByRate.entries()]
+    .sort(([first], [second]) => second - first)
+    .map(([taxRate, totals]) => ({
+      taxRate,
+      totalHT: totals.totalHTCents / 100,
+      totalTax: totals.totalTaxCents / 100,
+    }))
+}
+
+function formatDocumentNumber(prefix, year, sequence) {
+  return `${prefix}-${year}-${String(sequence).padStart(3, '0')}`
+}
+
 export default function Sales() {
   const { role, user } = useAuth()
-  const { data: clients, loading: clientsLoading, error: clientsError } = useFirestoreCollection('clients')
-  const { data: stock, loading: stockLoading, error: stockError } = useFirestoreCollection('stock')
-  const { data: sales, loading: salesLoading, error: salesError } = useFirestoreCollection('sales')
-  const { data: legacySales, error: legacySalesError } = useFirestoreCollection('salesDocuments')
+  const { data: clients, loading: clientsLoading, error: clientsError } =
+    useFirestoreCollection('clients')
+  const { data: stock, loading: stockLoading, error: stockError } =
+    useFirestoreCollection('stock')
+  const { data: sales, loading: salesLoading, error: salesError } =
+    useFirestoreCollection('sales')
+  const {
+    data: legacySales,
+    loading: legacySalesLoading,
+    error: legacySalesError,
+  } = useFirestoreCollection('salesDocuments')
   const [form, setForm] = useState(createEmptyForm)
+  const [formOpen, setFormOpen] = useState(false)
+  const [editingDocument, setEditingDocument] = useState(null)
   const [query, setQuery] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
+  const [clientFilter, setClientFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
   const [saving, setSaving] = useState(false)
   const [deliverySavingId, setDeliverySavingId] = useState('')
   const [exportingId, setExportingId] = useState('')
@@ -143,48 +375,163 @@ export default function Sales() {
   const [company, setCompany] = useState({})
   const [settingsError, setSettingsError] = useState('')
   const [pdfRequest, setPdfRequest] = useState(null)
+  const [numberPreview, setNumberPreview] = useState('')
+  const [numberPreviewLoading, setNumberPreviewLoading] = useState(false)
+  const [numberPreviewError, setNumberPreviewError] = useState('')
   const pdfRef = useRef(null)
   const settingsLoadedRef = useRef(false)
 
-  const availableDocumentTypes = useMemo(
-    () => role === 'Commercial'
-      ? DOCUMENT_OPTIONS.filter((option) => ['quote', 'invoice'].includes(option.value))
-      : DOCUMENT_OPTIONS,
-    [role],
-  )
-
-  useEffect(() => {
-    return onSnapshot(
-      doc(db, 'settings', 'company'),
-      (snapshot) => {
-        const settings = snapshot.exists() ? snapshot.data() : {}
-        setCompany(settings)
-        const isInitialSettingsLoad = !settingsLoadedRef.current
-        settingsLoadedRef.current = true
+  useEffect(() => onSnapshot(
+    doc(db, 'settings', 'company'),
+    (snapshot) => {
+      const settings = snapshot.exists() ? snapshot.data() : {}
+      const isInitialSettingsLoad = !settingsLoadedRef.current
+      settingsLoadedRef.current = true
+      setCompany(settings)
+      setSettingsError('')
+      if (isInitialSettingsLoad) {
         setForm((current) => {
-          const next = isInitialSettingsLoad
-            ? {
-              ...current,
-              items: current.items.map((line) => line.stockId
-                ? line
-                : { ...line, taxRate: String(getDefaultVatRate(settings)) }),
-            }
-            : current
+          const next = {
+            ...current,
+            items: current.items.map((line) => line.stockId
+              ? line
+              : { ...line, taxRate: String(getDefaultVatRate(settings)) }),
+          }
           return current.type === 'quote' && !current.generalConditions
             ? {
-              ...next,
-              dueDate: addMonthsToDate(
-                current.issueDate,
-                Number(settings.defaultQuoteValidityMonths) || 3,
-              ),
-              generalConditions: settings.defaultTermsAndConditions || '',
-            }
+                ...next,
+                dueDate: addMonthsToDate(
+                  current.issueDate,
+                  Number(settings.defaultQuoteValidityMonths) || 3,
+                ),
+                generalConditions: settings.defaultTermsAndConditions || '',
+              }
             : next
         })
-      },
-      (snapshotError) => setSettingsError(snapshotError.message),
-    )
-  }, [])
+      }
+    },
+    (snapshotError) => setSettingsError(snapshotError.message),
+  ), [])
+
+  useEffect(() => {
+    if (!notice) return undefined
+    const timer = window.setTimeout(() => setNotice(''), 4000)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+
+  const clientById = useMemo(
+    () => new Map(clients.map((client) => [client.id, client])),
+    [clients],
+  )
+  const stockById = useMemo(
+    () => new Map(stock.map((item) => [item.id, item])),
+    [stock],
+  )
+
+  const linePreviews = useMemo(
+    () => getLinePreviews(form.items, stockById, form.type, company),
+    [form.items, form.type, stockById, company.defaultVatRate],
+  )
+  const calculatedTotals = useMemo(
+    () => calculateTotals(linePreviews),
+    [linePreviews],
+  )
+  const documents = useMemo(
+    () => [
+      ...sales.map((item) => ({ ...item, sourceCollection: 'sales' })),
+      ...legacySales.map((item) => ({ ...item, sourceCollection: 'salesDocuments' })),
+    ].map((item) => ({
+      ...item,
+      __clientName: item.clientName || getClientName(clientById.get(item.clientId)),
+      __documentStatus: getDocumentStatus(item),
+      __typeLabel: DOCUMENT_OPTIONS.find((option) => option.value === item.type)?.label || item.type,
+      __totalTTC: getStoredTotal(item),
+      __dateSort: dateInputValue(item.issueDate),
+    })),
+    [sales, legacySales, clientById],
+  )
+  const filteredDocuments = useMemo(() => {
+    const search = query.trim().toLowerCase()
+    return documents
+      .filter((item) => !typeFilter || item.type === typeFilter)
+      .filter((item) => !clientFilter || item.clientId === clientFilter)
+      .filter((item) => !statusFilter || item.__documentStatus === statusFilter)
+      .filter((item) =>
+        [item.number, item.__clientName, item.__typeLabel, item.__documentStatus]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(search)),
+      )
+  }, [documents, query, typeFilter, clientFilter, statusFilter])
+  const table = useDataTable(filteredDocuments)
+  const exportColumns = [
+    { label: 'N° Document', key: 'number' },
+    { label: 'Type', value: (item) => item.__typeLabel },
+    { label: 'Date', value: (item) => formatDate(item.issueDate) },
+    { label: 'Client', key: '__clientName' },
+    { label: 'Total TTC', value: (item) => formatCurrency(item.__totalTTC, company.defaultCurrency) },
+    { label: 'Statut', value: (item) => item.__documentStatus },
+  ]
+
+  const documentYear = form.issueDate.slice(0, 4)
+  const documentPrefix = getPrefix(form.type, company)
+  const needsNewNumber = !editingDocument ||
+    !editingDocument.number ||
+    editingDocument.type !== form.type ||
+    dateInputValue(editingDocument.issueDate).slice(0, 4) !== documentYear
+
+  useEffect(() => {
+    if (!formOpen || !isValidDate(form.issueDate)) {
+      setNumberPreview('')
+      setNumberPreviewError('')
+      setNumberPreviewLoading(false)
+      return undefined
+    }
+
+    if (editingDocument && !needsNewNumber) {
+      setNumberPreview(editingDocument.number || '')
+      setNumberPreviewError('')
+      setNumberPreviewLoading(false)
+      return undefined
+    }
+
+    let active = true
+    setNumberPreview('')
+    setNumberPreviewError('')
+    setNumberPreviewLoading(true)
+    const counterRef = doc(db, 'salesCounters', `${form.type}-${documentYear}`)
+    getDoc(counterRef)
+      .then((snapshot) => {
+        if (!active) return
+        const currentValue = Number(snapshot.data()?.value || 0)
+        if (
+          !Number.isSafeInteger(currentValue) ||
+          currentValue < 0 ||
+          currentValue >= Number.MAX_SAFE_INTEGER
+        ) {
+          throw new Error('Le compteur de documents contient une valeur invalide.')
+        }
+        setNumberPreview(formatDocumentNumber(documentPrefix, documentYear, currentValue + 1))
+      })
+      .catch((previewError) => {
+        if (active) {
+          setNumberPreviewError(
+            previewError instanceof Error ? previewError.message : 'Impossible de charger le compteur.',
+          )
+        }
+      })
+      .finally(() => {
+        if (active) setNumberPreviewLoading(false)
+      })
+    return () => { active = false }
+  }, [
+    documentPrefix,
+    documentYear,
+    editingDocument,
+    form.issueDate,
+    form.type,
+    formOpen,
+    needsNewNumber,
+  ])
 
   useEffect(() => {
     if (!pdfRequest || !pdfRef.current) return undefined
@@ -206,61 +553,23 @@ export default function Sales() {
     return () => { cancelled = true }
   }, [pdfRequest, company])
 
-  const clientById = useMemo(
-    () => new Map(clients.map((client) => [client.id, client])),
-    [clients],
-  )
-  const stockById = useMemo(
-    () => new Map(stock.map((item) => [item.id, item])),
-    [stock],
-  )
-  const documents = useMemo(
-    () => [
-      ...sales.map((item) => ({ ...item, sourceCollection: 'sales' })),
-      ...legacySales.map((item) => ({ ...item, sourceCollection: 'salesDocuments' })),
-    ].filter((item) => availableDocumentTypes.some((option) => option.value === item.type)),
-    [sales, legacySales, availableDocumentTypes],
-  )
-  const filteredDocuments = useMemo(() => {
-    const search = query.trim().toLowerCase()
-    return documents
-      .filter((item) => !typeFilter || item.type === typeFilter)
-      .filter((item) =>
-        [item.number, item.clientName, item.type]
-          .filter(Boolean)
-          .some((value) => String(value).toLowerCase().includes(search)),
-      )
-      .sort((first, second) => String(second.number || '').localeCompare(String(first.number || ''), 'fr'))
-  }, [documents, query, typeFilter])
-  const table = useDataTable(filteredDocuments)
-
-  const calculatedTotals = useMemo(() => {
-    const validLines = form.items.flatMap((line) => {
-      const item = stockById.get(line.stockId)
-      const unitPrice = Number(item?.salePrice ?? item?.unitPrice)
-      const taxRate = Number(line.taxRate ?? getDefaultVatRate(company))
-      if (!item || !getVatOptions(company).includes(taxRate)) return []
-      const amounts = tryCalculateLineAmounts(unitPrice, line.quantity, taxRate)
-      return amounts ? [amounts] : []
-    })
-    try {
-      return { ...sumLineAmounts(validLines), error: '' }
-    } catch (sumError) {
-      if (!(sumError instanceof RangeError)) throw sumError
-      return {
-        totalHT: 0,
-        totalTax: 0,
-        totalTTC: 0,
-        error: 'Le total dépasse la limite de calcul prise en charge. Réduisez les quantités ou les montants.',
-      }
-    }
-  }, [company, form.items, stockById])
-
   const updateLine = (index, changes) => {
     setForm((current) => ({
       ...current,
-      items: current.items.map((line, lineIndex) => lineIndex === index ? { ...line, ...changes } : line),
+      items: current.items.map((line, lineIndex) =>
+        lineIndex === index ? { ...line, ...changes } : line,
+      ),
     }))
+  }
+
+  const selectStockItem = (index, stockId) => {
+    const item = stockById.get(stockId)
+    updateLine(index, {
+      stockId,
+      reference: item?.reference || item?.tgiReference || '',
+      designation: item?.name || item?.designation || '',
+      unitPrice: item ? String(item.salePrice ?? item.unitPrice ?? '') : '',
+    })
   }
 
   const addLine = () => {
@@ -268,81 +577,234 @@ export default function Sales() {
       ...current,
       items: [
         ...current.items,
-        { stockId: '', quantity: '1', taxRate: String(getDefaultVatRate(company)) },
+        {
+          stockId: '',
+          reference: '',
+          designation: '',
+          unitPrice: '',
+          quantity: '1',
+          taxRate: String(getDefaultVatRate(company)),
+        },
       ],
     }))
   }
 
   const removeLine = (index) => {
-    setForm((current) => ({ ...current, items: current.items.filter((_, lineIndex) => lineIndex !== index) }))
+    setForm((current) => ({
+      ...current,
+      items: current.items.filter((_, lineIndex) => lineIndex !== index),
+    }))
+  }
+
+  const handleSetField = (name, value) => {
+    if (name === 'type') {
+      setForm((current) => ({
+        ...current,
+        type: value,
+        dueDate: value === 'quote'
+          ? addMonthsToDate(current.issueDate, Number(company.defaultQuoteValidityMonths) || 3)
+          : current.dueDate >= current.issueDate
+            ? current.dueDate
+            : addMonthsToDate(current.issueDate, 1),
+        generalConditions: value === 'quote'
+          ? current.generalConditions || company.defaultTermsAndConditions || ''
+          : current.generalConditions,
+      }))
+      return
+    }
+    if (name === 'issueDate') {
+      setForm((current) => ({
+        ...current,
+        issueDate: value,
+        dueDate: current.type === 'quote'
+          ? addMonthsToDate(value, Number(company.defaultQuoteValidityMonths) || 3)
+          : current.dueDate >= value ? current.dueDate : addMonthsToDate(value, 1),
+      }))
+      return
+    }
+    setForm((current) => ({ ...current, [name]: value }))
+  }
+
+  const openNew = () => {
+    setEditingDocument(null)
+    setForm(createEmptyForm(company))
+    setError('')
+    setNotice('')
+    setFormOpen(true)
+  }
+
+  const mapDocumentToForm = (documentData) => ({
+    type: DOCUMENT_OPTIONS.some((option) => option.value === documentData.type)
+      ? documentData.type
+      : 'quote',
+    clientId: documentData.clientId || '',
+    issueDate: dateInputValue(documentData.issueDate, localDate()),
+    dueDate: dateInputValue(documentData.dueDate, localDate(30)),
+    notes: documentData.notes || '',
+    generalConditions: documentData.generalConditions || '',
+    items: (Array.isArray(documentData.items) ? documentData.items : []).map((line) => {
+      const stockItem = stockById.get(line.stockId)
+      return {
+        stockId: line.stockId || '',
+        reference: line.reference || line.tgiReference || stockItem?.reference || stockItem?.tgiReference || '',
+        designation: line.name || line.designation || stockItem?.name || stockItem?.designation || '',
+        unitPrice: String(line.unitPrice ?? stockItem?.salePrice ?? stockItem?.unitPrice ?? ''),
+        quantity: String(line.quantity ?? 1),
+        taxRate: String(line.taxRate ?? line.vatRate ?? getDefaultVatRate(company)),
+      }
+    }),
+  })
+
+  const openEdit = (documentData) => {
+    if (documentData.sourceCollection !== 'sales') {
+      setError('Ce document historique est consultable et exportable, mais ne peut pas être modifié. Dupliquez-le pour créer une nouvelle version.')
+      return
+    }
+    if (documentData.type === 'deliveryNote' && isDeliveryValidated(documentData)) {
+      setError('Une livraison déjà validée ne peut pas être modifiée, car son stock a été décrémenté.')
+      return
+    }
+    if (getDocumentStatus(documentData) === 'Annulé') {
+      setError('Un document annulé ne peut pas être modifié. Dupliquez-le pour créer une nouvelle version.')
+      return
+    }
+    setEditingDocument(documentData)
+    setForm(mapDocumentToForm(documentData))
+    setError('')
+    setNotice('')
+    setFormOpen(true)
+  }
+
+  const duplicateDocument = (documentData) => {
+    const duplicate = mapDocumentToForm(documentData)
+    const issueDate = localDate()
+    setEditingDocument(null)
+    setForm({
+      ...duplicate,
+      issueDate,
+      dueDate: duplicate.type === 'quote'
+        ? addMonthsToDate(issueDate, Number(company.defaultQuoteValidityMonths) || 3)
+        : addMonthsToDate(issueDate, 1),
+    })
+    setError('')
+    setNotice(`Brouillon préparé à partir de ${documentData.number || 'ce document'} ; un nouveau numéro sera attribué.`)
+    setFormOpen(true)
   }
 
   const saveDocument = async (event) => {
     event.preventDefault()
     setError('')
     setNotice('')
+
     if (!clientById.has(form.clientId)) {
       setError('Sélectionnez un client valide.')
       return
     }
-    if (!availableDocumentTypes.some((option) => option.value === form.type)) {
-      setError('Le type de document sélectionné n’est pas autorisé pour votre rôle.')
+    if (!DOCUMENT_OPTIONS.some((option) => option.value === form.type)) {
+      setError('Sélectionnez un type de document valide.')
       return
     }
-    if (!form.issueDate || !form.dueDate || form.dueDate < form.issueDate) {
+    if (
+      !isValidDate(form.issueDate) ||
+      !isValidDate(form.dueDate) ||
+      form.dueDate < form.issueDate
+    ) {
       setError('Renseignez des dates valides ; l’échéance doit être le jour d’émission ou une date ultérieure.')
       return
     }
-    if (!form.items.length || form.items.some((line) => !line.stockId)) {
-      setError('Ajoutez au moins une ligne et sélectionnez un article sur chaque ligne.')
+    if (!form.items.length) {
+      setError('Ajoutez au moins une ligne au document.')
       return
     }
-    if (form.items.some((line) => !Number.isSafeInteger(Number(line.quantity)) || Number(line.quantity) <= 0)) {
-      setError('La quantité de chaque ligne doit être un entier supérieur à zéro.')
-      return
-    }
-    if (form.items.some((line) => !stockById.has(line.stockId))) {
-      setError('Un article sélectionné n’est plus disponible dans le stock.')
-      return
-    }
-    if (form.items.some((line) => !getVatOptions(company).includes(Number(line.taxRate)))) {
-      setError('Sélectionnez un taux de TVA autorisé sur chaque ligne.')
+    if (linePreviews.some((preview) => preview.error)) {
+      setError('Vérifiez chaque ligne : article, désignation, quantité entière positive, prix HT et taux de TVA sont requis.')
       return
     }
     if (calculatedTotals.error) {
       setError(calculatedTotals.error)
       return
     }
+    if (
+      editingDocument?.type === 'invoice' &&
+      form.type !== 'invoice' &&
+      Number(editingDocument.paidAmount || 0) > 0
+    ) {
+      setError('Le type d’une facture ayant reçu un paiement ne peut pas être modifié.')
+      return
+    }
 
     setSaving(true)
-    try {
-      const client = clientById.get(form.clientId)
-      const documentRef = doc(collection(db, 'sales'))
-      const year = form.issueDate.slice(0, 4)
-      const counterRef = doc(db, 'salesCounters', `${form.type}-${year}`)
-      const stockRefs = form.items.map((line) => doc(db, 'stock', line.stockId))
+    const isEditing = Boolean(editingDocument)
+    const needsSequence = needsNewNumber
+    const documentRef = isEditing
+      ? doc(db, 'sales', editingDocument.id)
+      : doc(collection(db, 'sales'))
+    const clientRef = doc(db, 'clients', form.clientId)
+    const settingsRef = doc(db, 'settings', 'company')
+    const counterRef = doc(db, 'salesCounters', `${form.type}-${form.issueDate.slice(0, 4)}`)
+    const uniqueStockIds = [...new Set(form.items.map((line) => line.stockId))]
+    const stockRefs = uniqueStockIds.map((stockId) => doc(db, 'stock', stockId))
 
-      const documentData = await runTransaction(db, async (transaction) => {
-        const counterSnapshot = await transaction.get(counterRef)
-        const stockSnapshots = await Promise.all(stockRefs.map((stockRef) => transaction.get(stockRef)))
-        const lines = form.items.map((line, index) => {
-          const itemSnapshot = stockSnapshots[index]
-          if (!itemSnapshot.exists()) throw new Error('Un article n’existe plus dans l’inventaire.')
+    try {
+      const savedDocument = await runTransaction(db, async (transaction) => {
+        const reads = [
+          transaction.get(settingsRef),
+          transaction.get(clientRef),
+        ]
+        if (isEditing) reads.push(transaction.get(documentRef))
+        if (needsSequence) reads.push(transaction.get(counterRef))
+        stockRefs.forEach((stockRef) => reads.push(transaction.get(stockRef)))
+        const snapshots = await Promise.all(reads)
+        let snapshotIndex = 0
+        const settingsSnapshot = snapshots[snapshotIndex]
+        snapshotIndex += 1
+        const clientSnapshot = snapshots[snapshotIndex]
+        snapshotIndex += 1
+        const existingSnapshot = isEditing ? snapshots[snapshotIndex++] : null
+        const counterSnapshot = needsSequence ? snapshots[snapshotIndex++] : null
+        const stockSnapshots = snapshots.slice(snapshotIndex)
+        const stockSnapshotById = new Map(
+          uniqueStockIds.map((stockId, index) => [stockId, stockSnapshots[index]]),
+        )
+
+        if (!clientSnapshot.exists()) throw new Error('Le client n’existe plus. Actualisez la liste et réessayez.')
+        const client = { ...clientSnapshot.data(), id: clientSnapshot.id }
+        if (isEditing && !existingSnapshot?.exists()) {
+          throw new Error('Le document a été supprimé ou déplacé. Actualisez la liste.')
+        }
+        const previous = existingSnapshot?.data() || {}
+        if (previous.stockDeducted === true || isDeliveryValidated(previous)) {
+          throw new Error('Une livraison déjà validée ne peut pas être modifiée.')
+        }
+        if (getDocumentStatus({ ...previous, sourceCollection: 'sales' }) === 'Annulé') {
+          throw new Error('Un document annulé ne peut pas être modifié.')
+        }
+
+        const settings = settingsSnapshot.exists() ? settingsSnapshot.data() : {}
+        const lines = form.items.map((line) => {
+          const itemSnapshot = stockSnapshotById.get(line.stockId)
+          if (!itemSnapshot?.exists()) {
+            throw new Error('Un article sélectionné n’existe plus dans l’inventaire.')
+          }
           const item = itemSnapshot.data()
           const quantity = Number(line.quantity)
-          const unitPrice = Number(item.salePrice ?? item.unitPrice)
-          const taxRate = Number(line.taxRate ?? getDefaultVatRate(company))
-          if (!Number.isFinite(unitPrice) || unitPrice < 0) {
-            throw new Error(`Le prix de vente de « ${item.name || item.designation || 'l’article'} » est invalide.`)
+          const unitPrice = Number(line.unitPrice)
+          const taxRate = Number(line.taxRate)
+          if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+            throw new Error('La quantité de chaque ligne doit être un entier supérieur à zéro.')
           }
-          if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100) {
-            throw new Error(`Le taux de TVA de « ${item.name || item.designation || 'l’article'} » est invalide.`)
+          if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+            throw new Error(`Le prix HT de « ${line.designation || item.name || 'l’article'} » est invalide.`)
+          }
+          if (!getVatOptions(settings).includes(taxRate)) {
+            throw new Error(`Le taux de TVA de « ${line.designation || item.name || 'l’article'} » n’est plus autorisé.`)
           }
           const amounts = calculateLineAmounts(unitPrice, quantity, taxRate)
           return {
             stockId: line.stockId,
-            reference: item.reference || item.tgiReference || '',
-            name: item.name || item.designation || '',
+            reference: item.reference || item.tgiReference || line.reference || '',
+            name: String(line.designation || '').trim(),
+            designation: String(line.designation || '').trim(),
             quantity,
             unitPrice: amounts.unitPrice,
             taxRate,
@@ -352,13 +814,39 @@ export default function Sales() {
           }
         })
         const totals = sumLineAmounts(lines)
-        const sequence = Number(counterSnapshot.data()?.value || 0) + 1
-        const documentOption = DOCUMENT_OPTIONS.find((option) => option.value === form.type)
-        const configuredPrefix = documentOption && String(company[documentOption.prefixField] || documentOption.prefix)
-          .trim()
-          .replace(/-+$/, '')
-        const prefix = configuredPrefix || 'DOC'
-        const number = `${prefix}-${year}-${String(sequence).padStart(3, '0')}`
+        const taxBreakdown = buildTaxBreakdown(lines)
+        const totalCents = toCents(totals.totalTTC)
+        const paidAmount = form.type === 'invoice' && previous.type === 'invoice'
+          ? Number(previous.paidAmount || 0)
+          : 0
+        const paidCents = toCents(paidAmount)
+        if (paidCents > totalCents) {
+          throw new Error('Le nouveau total TTC ne peut pas être inférieur aux paiements déjà enregistrés.')
+        }
+        if (previous.type === 'invoice' && paidCents > 0 && form.type !== 'invoice') {
+          throw new Error('Le type d’une facture ayant reçu un paiement ne peut pas être modifié.')
+        }
+
+        let number = previous.number || ''
+        if (!isEditing || needsSequence) {
+          const currentSequence = Number(counterSnapshot?.data()?.value || 0)
+          if (!Number.isSafeInteger(currentSequence) || currentSequence < 0 || currentSequence >= Number.MAX_SAFE_INTEGER) {
+            throw new Error('Le compteur de documents est invalide ou a atteint sa limite.')
+          }
+          const sequence = currentSequence + 1
+          const year = form.issueDate.slice(0, 4)
+          number = formatDocumentNumber(getPrefix(form.type, settings), year, sequence)
+          transaction.set(counterRef, { value: sequence, updatedAt: serverTimestamp() })
+        }
+
+        const remainingAmount = form.type === 'invoice'
+          ? (totalCents - paidCents) / 100
+          : 0
+        const status = form.type === 'deliveryNote'
+          ? 'pending_delivery'
+          : form.type === 'invoice'
+            ? remainingAmount === 0 ? 'paid' : 'unpaid'
+            : 'issued'
         const data = {
           type: form.type,
           number,
@@ -372,29 +860,33 @@ export default function Sales() {
           clientIce: client.ice || '',
           items: lines,
           ...totals,
+          taxBreakdown,
           issueDate: form.issueDate,
           dueDate: form.dueDate,
-          notes: form.notes.trim(),
-          generalConditions: form.type === 'quote' ? form.generalConditions.trim() : '',
-          paidAmount: 0,
-          remainingAmount: form.type === 'invoice' ? totals.totalTTC : 0,
-          status: form.type === 'invoice' ? 'unpaid' : 'issued',
+          notes: String(form.notes || '').trim(),
+          generalConditions: form.type === 'quote' ? String(form.generalConditions || '').trim() : '',
+          paidAmount: form.type === 'invoice' ? paidAmount : 0,
+          remainingAmount,
+          status,
           ...(form.type === 'deliveryNote' ? { stockDeducted: false } : {}),
-          createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         }
-        transaction.set(counterRef, { value: sequence, updatedAt: serverTimestamp() })
-        transaction.set(documentRef, data)
-        return { ...data, id: documentRef.id }
+
+        if (isEditing) {
+          transaction.update(documentRef, data)
+        } else {
+          transaction.set(documentRef, {
+            ...data,
+            createdAt: serverTimestamp(),
+          })
+        }
+        return { ...data, id: documentRef.id, sourceCollection: 'sales' }
       })
 
-      setForm(createEmptyForm(company))
-      setNotice(`${form.type === 'invoice' ? 'Facture' : availableDocumentTypes.find((option) => option.value === form.type)?.label} ${documentData.number} enregistrée. Génération du PDF…`)
-      setExportingId(documentData.id)
-      setPdfRequest({
-        document: documentData,
-        client,
-      })
+      setFormOpen(false)
+      setEditingDocument(null)
+      setNotice(`${DOCUMENT_OPTIONS.find((option) => option.value === savedDocument.type)?.label || 'Document'} ${savedDocument.number} enregistré.`)
+      setError('')
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Impossible d’enregistrer ce document.')
     } finally {
@@ -406,7 +898,16 @@ export default function Sales() {
     setError('')
     setExportingId(documentData.id)
     try {
-      const client = clientById.get(documentData.clientId) || {
+      const liveClient = clientById.get(documentData.clientId)
+      const client = liveClient ? {
+        ...liveClient,
+        address: liveClient.address || documentData.clientAddress || '',
+        city: liveClient.city || documentData.clientCity || '',
+        postalCode: liveClient.postalCode || documentData.clientPostalCode || '',
+        phone: liveClient.phone || liveClient.phone1 || documentData.clientPhone || '',
+        email: liveClient.email || documentData.clientEmail || '',
+        ice: liveClient.ice || documentData.clientIce || '',
+      } : {
         name: documentData.clientName,
         address: documentData.clientAddress,
         city: documentData.clientCity,
@@ -433,6 +934,10 @@ export default function Sales() {
       setError('Seuls les nouveaux bons de livraison peuvent être validés ici. Les documents historiques ont pu déjà déduire le stock.')
       return
     }
+    if (isDeliveryValidated(documentData)) {
+      setError('Cette livraison a déjà été validée ; le stock ne sera pas déduit une seconde fois.')
+      return
+    }
     if (!window.confirm(`Confirmer la livraison ${documentData.number} ? Les quantités seront déduites du stock et cette action ne pourra pas être appliquée deux fois.`)) {
       return
     }
@@ -445,7 +950,7 @@ export default function Sales() {
         if (!deliverySnapshot.exists()) throw new Error('Ce bon de livraison n’existe plus.')
         const delivery = deliverySnapshot.data()
         if (delivery.type !== 'deliveryNote') throw new Error('Le document sélectionné n’est pas un bon de livraison.')
-        if (delivery.stockDeducted === true || ['delivered', 'livré', 'livree', 'livrée'].includes(String(delivery.status || '').toLowerCase())) {
+        if (isDeliveryValidated(delivery)) {
           throw new Error('Cette livraison a déjà été validée ; le stock ne sera pas déduit une seconde fois.')
         }
 
@@ -453,10 +958,14 @@ export default function Sales() {
         for (const line of delivery.items || []) {
           const stockId = String(line.stockId || '')
           const quantity = Number(line.quantity)
-          if (!stockId || !Number.isInteger(quantity) || quantity <= 0) {
+          if (!stockId || !Number.isSafeInteger(quantity) || quantity <= 0) {
             throw new Error('Une ligne du bon est invalide (article ou quantité manquante).')
           }
-          requiredByStock.set(stockId, (requiredByStock.get(stockId) || 0) + quantity)
+          const combinedQuantity = (requiredByStock.get(stockId) || 0) + quantity
+          if (!Number.isSafeInteger(combinedQuantity)) {
+            throw new Error('La quantité cumulée d’un article dépasse la limite prise en charge.')
+          }
+          requiredByStock.set(stockId, combinedQuantity)
         }
         if (!requiredByStock.size) throw new Error('Ce bon ne contient aucun article à livrer.')
 
@@ -469,7 +978,7 @@ export default function Sales() {
           const item = snapshot.data()
           const currentQuantity = Number(item.quantity)
           const requiredQuantity = requiredByStock.get(stockId)
-          if (!Number.isInteger(currentQuantity) || currentQuantity < 0) {
+          if (!Number.isSafeInteger(currentQuantity) || currentQuantity < 0) {
             throw new Error(`La quantité en stock de « ${item.name || item.designation || stockId} » est invalide.`)
           }
           if (currentQuantity < requiredQuantity) {
@@ -497,26 +1006,44 @@ export default function Sales() {
     }
   }
 
-  const documentLabel = (type) => DOCUMENT_OPTIONS.find((option) => option.value === type)?.label || type
-  const documentStatusLabel = (documentData) => {
-    if (documentData.type === 'deliveryNote') {
-      return documentData.stockDeducted === true || ['delivered', 'livré', 'livree', 'livrée'].includes(String(documentData.status || '').toLowerCase())
-        ? 'Livré'
-        : 'À livrer'
-    }
-    return documentData.status || 'Émis'
+  const clearFilters = () => {
+    setQuery('')
+    setTypeFilter('')
+    setClientFilter('')
+    setStatusFilter('')
+    table.setPage(1)
   }
+
   const pageError = clientsError || stockError || salesError || legacySalesError || settingsError || error
-  const selectedClient = clientById.get(form.clientId)
+  const hasFilters = Boolean(query || typeFilter || clientFilter || statusFilter)
+  const isLoading = clientsLoading || stockLoading || salesLoading || legacySalesLoading
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8 sm:px-8 sm:py-10">
+      {notice && (
+        <div className="fixed right-4 top-4 z-[60] flex max-w-[calc(100vw-2rem)] items-start gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-3 text-sm font-semibold text-emerald-800 shadow-xl" role="status">
+          <CheckCircle2 aria-hidden="true" className="mt-0.5 shrink-0" size={17} />
+          {notice}
+        </div>
+      )}
+
       <header className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-700">Gestion commerciale</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Ventes & facturation</h1>
-          <p className="mt-2 text-sm text-slate-500">Devis, commandes, livraisons et factures avec calculs HT / TVA / TTC.</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-700">Gestion commerciale</p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Ventes & documents</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
+            Préparez devis, commandes, livraisons et factures avec calculs HT, TVA et TTC au centime.
+          </p>
         </div>
+        <button
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-steel-800 to-steel-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-steel-900/20 transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={clientsLoading || stockLoading || clients.length === 0 || stock.length === 0}
+          onClick={openNew}
+          type="button"
+        >
+          <FilePlus2 aria-hidden="true" size={18} />
+          Nouveau document
+        </button>
       </header>
 
       {pageError && (
@@ -525,287 +1052,293 @@ export default function Sales() {
           {pageError}
         </p>
       )}
-      {notice && <p className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{notice}</p>}
 
-      <section className="mt-8 animate-slide-up rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-100 px-5 py-5 sm:px-7">
+      <section className="mt-8 overflow-hidden rounded-2xl border border-white bg-white/90 shadow-xl shadow-slate-900/[0.04] ring-1 ring-slate-200/70 backdrop-blur-xl">
+        <div className="flex flex-col gap-4 border-b border-slate-100 p-4 sm:px-6 sm:py-5 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><FilePlus2 size={19} /></span>
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-steel-50 text-steel-800">
+              <FileText aria-hidden="true" size={19} />
+            </span>
             <div>
-              <h2 className="font-semibold text-slate-900">Nouveau document</h2>
-              <p className="mt-1 text-xs text-slate-500">Les prix viennent du stock ; le taux de TVA est réglable sur chaque ligne.</p>
-            </div>
-          </div>
-        </div>
-
-        <form className="space-y-6 p-5 sm:p-7" onSubmit={saveDocument}>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <label>
-              <span className="mb-1.5 block text-xs font-semibold text-slate-700">Type de document *</span>
-              <select
-                className={inputClass}
-                onChange={(event) => setForm((current) => {
-                  const type = event.target.value
-                  return {
-                    ...current,
-                    type,
-                    dueDate: type === 'quote'
-                      ? addMonthsToDate(current.issueDate, Number(company.defaultQuoteValidityMonths) || 3)
-                      : current.dueDate || localDate(30),
-                    generalConditions: type === 'quote'
-                      ? current.generalConditions || company.defaultTermsAndConditions || ''
-                      : current.generalConditions,
-                  }
-                })}
-                value={form.type}
-              >
-                {availableDocumentTypes.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-              <span className="mt-1 block text-xs text-slate-500">Numéro généré automatiquement à l’enregistrement.</span>
-            </label>
-            <label>
-              <span className="mb-1.5 block text-xs font-semibold text-slate-700">Date d’émission *</span>
-              <input
-                className={inputClass}
-                onChange={(event) => setForm((current) => ({
-                  ...current,
-                  issueDate: event.target.value,
-                  dueDate: current.type === 'quote'
-                    ? addMonthsToDate(event.target.value, Number(company.defaultQuoteValidityMonths) || 3)
-                    : current.dueDate,
-                }))}
-                required
-                type="date"
-                value={form.issueDate}
-              />
-            </label>
-            <label>
-              <span className="mb-1.5 block text-xs font-semibold text-slate-700">{form.type === 'quote' ? 'Valide jusqu’au *' : 'Date d’échéance *'}</span>
-              <input className={inputClass} onChange={(event) => setForm((current) => ({ ...current, dueDate: event.target.value }))} required type="date" value={form.dueDate} />
-            </label>
-            <label>
-              <span className="mb-1.5 block text-xs font-semibold text-slate-700">Client *</span>
-              <select className={inputClass} onChange={(event) => setForm((current) => ({ ...current, clientId: event.target.value }))} required value={form.clientId}>
-                <option value="">Sélectionner un client</option>
-                {clients.map((client) => <option key={client.id} value={client.id}>{getClientName(client)}</option>)}
-              </select>
-              <span className="mt-1 block text-xs text-slate-500">
-                ICE : {selectedClient?.ice || 'Non renseigné'}
-              </span>
-            </label>
-          </div>
-
-          <div className="overflow-hidden rounded-xl border border-slate-200">
-            <div className="flex items-center justify-between gap-3 bg-slate-50 px-4 py-3">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-800">Lignes de facturation</h3>
-                <p className="mt-1 text-xs text-slate-500">
-                  Taux sélectionnable par ligne · défaut des paramètres : {getDefaultVatRate(company)} %.
-                </p>
-              </div>
-              <button className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-blue-800 hover:bg-blue-50" onClick={addLine} type="button">
-                <Plus size={15} /> Ajouter une ligne
-              </button>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {form.items.map((line, index) => {
-                const item = stockById.get(line.stockId)
-                const unitPrice = Number(item?.salePrice ?? item?.unitPrice)
-                const taxRate = Number(line.taxRate ?? getDefaultVatRate(company))
-                const amounts = item ? tryCalculateLineAmounts(unitPrice, line.quantity, taxRate) : null
-                return (
-                  <div className="grid items-end gap-3 p-4 sm:grid-cols-[minmax(0,2fr)_100px_110px_minmax(130px,1fr)_40px]" key={`sale-line-${index}`}>
-                    <label>
-                      <span className="mb-1.5 block text-xs font-semibold text-slate-700">Article *</span>
-                      <select className={inputClass} onChange={(event) => updateLine(index, { stockId: event.target.value })} required value={line.stockId}>
-                        <option value="">Sélectionner un article</option>
-                        {stock.map((stockItem) => (
-                          <option key={stockItem.id} value={stockItem.id}>
-                            {stockItem.reference || stockItem.tgiReference || '—'} · {stockItem.name || stockItem.designation}
-                          </option>
-                        ))}
-                      </select>
-                      {item && <span className="mt-1 block text-xs text-slate-500">{formatCurrency(unitPrice, company.defaultCurrency)} HT / unité · Stock {item.quantity ?? 0}</span>}
-                    </label>
-                    <label>
-                      <span className="mb-1.5 block text-xs font-semibold text-slate-700">Quantité *</span>
-                      <input className={inputClass} min="1" onChange={(event) => updateLine(index, { quantity: event.target.value })} required step="1" type="number" value={line.quantity} />
-                    </label>
-                    <label>
-                      <span className="mb-1.5 block text-xs font-semibold text-slate-700">TVA *</span>
-                      <select
-                        className={inputClass}
-                        onChange={(event) => updateLine(index, { taxRate: event.target.value })}
-                        required
-                        value={String(taxRate)}
-                      >
-                        {getVatOptions(company).map((rate) => (
-                          <option key={rate} value={rate}>{rate}%</option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="pb-2 text-right">
-                      <span className="block text-xs text-slate-500">Total HT ligne</span>
-                      <strong className="text-sm text-slate-900">{amounts ? formatCurrency(amounts.totalHT, company.defaultCurrency) : '—'}</strong>
-                      <span className="mt-1 block text-xs text-slate-500">
-                        TVA : {amounts ? formatCurrency(amounts.taxAmount, company.defaultCurrency) : '—'}
-                        {' · '}TTC : {amounts ? formatCurrency(amounts.totalTTC, company.defaultCurrency) : '—'}
-                      </span>
-                    </div>
-                    <button aria-label={`Supprimer la ligne ${index + 1}`} className="mb-1 flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" disabled={form.items.length === 1} onClick={() => removeLine(index)} type="button">
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold text-slate-700">Notes / conditions</span>
-            <textarea className={`${inputClass} min-h-20 resize-y`} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} rows={3} value={form.notes} />
-          </label>
-          {form.type === 'quote' && (
-            <label className="block">
-              <span className="mb-1.5 block text-xs font-semibold text-slate-700">Conditions générales de vente</span>
-              <textarea
-                className={`${inputClass} min-h-28 resize-y`}
-                onChange={(event) => setForm((current) => ({ ...current, generalConditions: event.target.value }))}
-                rows={4}
-                value={form.generalConditions}
-              />
-              <span className="mt-1 block text-xs text-slate-500">Préremplies depuis les paramètres de la société ; modifiables pour ce devis.</span>
-            </label>
-          )}
-
-          <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-            {form.type === 'deliveryNote' && (
-              <p className="max-w-md rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">
-                Le stock ne sera décrémenté qu’après validation du bon de livraison.
+              <h2 className="text-sm font-semibold text-slate-900">Documents commerciaux</h2>
+              <p className="text-xs text-slate-500">
+                {filteredDocuments.length} résultat{filteredDocuments.length === 1 ? '' : 's'} sur {documents.length}
               </p>
-            )}
-            <div className="ml-auto rounded-xl bg-slate-50 px-5 py-4 sm:min-w-[20rem]">
-              {calculatedTotals.error && (
-                <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700" role="alert">
-                  {calculatedTotals.error}
-                </p>
-              )}
-              <p className="flex justify-between gap-8 text-sm text-slate-600"><span>Total HT</span><strong>{formatCurrency(calculatedTotals.totalHT, company.defaultCurrency)}</strong></p>
-              <p className="mt-2 flex justify-between gap-8 text-sm text-slate-600"><span>Total TVA</span><strong>{formatCurrency(calculatedTotals.totalTax, company.defaultCurrency)}</strong></p>
-              <p className="mt-3 flex justify-between gap-8 border-t border-slate-200 pt-3 text-base font-bold text-blue-900"><span>Total TTC</span><strong>{formatCurrency(calculatedTotals.totalTTC, company.defaultCurrency)}</strong></p>
             </div>
           </div>
-          <div className="flex justify-end border-t border-slate-100 pt-4">
-            <button className="inline-flex items-center justify-center gap-2 rounded-xl bg-steel-700 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-steel-900/15 transition hover:-translate-y-0.5 hover:bg-steel-800 disabled:cursor-not-allowed disabled:opacity-60" disabled={saving || clientsLoading || stockLoading || clients.length === 0 || stock.length === 0 || Boolean(calculatedTotals.error)} type="submit">
-              <FilePlus2 size={17} /> {saving ? 'Enregistrement…' : 'Enregistrer et générer le PDF'}
-            </button>
-          </div>
-        </form>
-      </section>
-
-      <section className="mt-8 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-col gap-4 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700"><FileText size={19} /></span>
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">Documents de vente</h2>
-              <p className="text-xs text-slate-500">{filteredDocuments.length} document(s)</p>
-            </div>
-          </div>
-          <div className="grid w-full gap-2 sm:max-w-lg sm:grid-cols-[minmax(180px,1fr)_170px]">
+          <div className="grid w-full gap-2 sm:grid-cols-2 xl:max-w-5xl xl:grid-cols-[minmax(190px,1fr)_175px_minmax(190px,1fr)_155px]">
             <label className="relative block">
+              <span className="sr-only">Rechercher un document</span>
               <Search aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={17} />
-              <input className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" onChange={(event) => { setQuery(event.target.value); table.setPage(1) }} placeholder="Rechercher un document…" type="search" value={query} />
+              <input
+                className={`${inputClass} pl-10`}
+                onChange={(event) => {
+                  setQuery(event.target.value)
+                  table.setPage(1)
+                }}
+                placeholder="N° ou client…"
+                type="search"
+                value={query}
+              />
             </label>
-            <select aria-label="Filtrer par type de document" className={inputClass} onChange={(event) => { setTypeFilter(event.target.value); table.setPage(1) }} value={typeFilter}>
+            <select
+              aria-label="Filtrer par type de document"
+              className={inputClass}
+              onChange={(event) => {
+                setTypeFilter(event.target.value)
+                table.setPage(1)
+              }}
+              value={typeFilter}
+            >
               <option value="">Tous les types</option>
-              {availableDocumentTypes.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              {DOCUMENT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <select
+              aria-label="Filtrer par client"
+              className={inputClass}
+              onChange={(event) => {
+                setClientFilter(event.target.value)
+                table.setPage(1)
+              }}
+              value={clientFilter}
+            >
+              <option value="">Tous les clients</option>
+              {clients.map((client) => (
+                <option key={client.id} value={client.id}>{getClientName(client)}</option>
+              ))}
+            </select>
+            <select
+              aria-label="Filtrer par statut"
+              className={inputClass}
+              onChange={(event) => {
+                setStatusFilter(event.target.value)
+                table.setPage(1)
+              }}
+              value={statusFilter}
+            >
+              <option value="">Tous les statuts</option>
+              {DOCUMENT_STATUSES.map((status) => (
+                <option key={status} value={status}>{status}</option>
+              ))}
             </select>
           </div>
         </div>
-        {salesLoading ? (
-          <TableSkeleton columns={6} minWidth={720} />
+
+        <div className="border-b border-slate-100 px-4 py-3 sm:px-6">
+          <DataTableExportToolbar
+            columns={exportColumns}
+            rows={table.sortedItems}
+            title="Liste des documents commerciaux"
+          />
+        </div>
+
+        {isLoading ? (
+          <TableSkeleton columns={6} minWidth={900} />
         ) : filteredDocuments.length === 0 ? (
           <EmptyState
-            actionLabel={query || typeFilter ? 'Effacer les filtres' : 'Créer un document'}
-            description={query || typeFilter
-              ? 'Essayez une autre recherche ou effacez les filtres actifs.'
-              : 'Préparez un devis, un bon de livraison ou une facture à partir du formulaire.'}
+            actionLabel={hasFilters ? 'Effacer les filtres' : clients.length > 0 && stock.length > 0 ? 'Créer un document' : 'Compléter les données'}
+            description={hasFilters
+              ? 'Aucun document ne correspond aux filtres actifs.'
+              : clients.length > 0 && stock.length > 0
+                ? 'Créez un devis, un bon de commande, une livraison ou une facture à partir du stock.'
+                : 'Ajoutez au moins un client et un article en stock avant de créer un document.'}
             icon={FileText}
             onAction={() => {
-              if (query || typeFilter) {
-                setQuery('')
-                setTypeFilter('')
-                table.setPage(1)
-              } else {
-                window.scrollTo({ top: 0, behavior: 'smooth' })
-              }
+              if (hasFilters) clearFilters()
+              else if (clients.length > 0 && stock.length > 0) openNew()
+              else setError('Pour créer un document, ajoutez au moins un client et un article au stock.')
             }}
-            title={query || typeFilter ? 'Aucun document trouvé' : 'Aucun document de vente'}
+            title={hasFilters ? 'Aucun document trouvé' : 'Aucun document enregistré'}
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[45rem] text-left">
+            <table className="w-full min-w-[950px] text-left">
               <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 <tr>
-                  <th className="px-6 py-3.5">Numéro / type</th>
-                  <th className="px-5 py-3.5">Client</th>
-                  <th className="px-5 py-3.5">Émission / échéance</th>
-                  <th className="px-5 py-3.5">Total TTC</th>
-                  <th className="px-5 py-3.5">État</th>
+                  <SortableTableHeader className="px-5 py-3.5" columnKey="number" label="N° Document" {...table} />
+                  <SortableTableHeader className="px-5 py-3.5" columnKey="__typeLabel" label="Type" {...table} />
+                  <SortableTableHeader className="px-5 py-3.5" columnKey="__dateSort" label="Date" {...table} />
+                  <SortableTableHeader className="px-5 py-3.5" columnKey="__clientName" label="Client" {...table} />
+                  <SortableTableHeader className="px-5 py-3.5" columnKey="__totalTTC" label="Total TTC" {...table} />
+                  <SortableTableHeader className="px-5 py-3.5" columnKey="__documentStatus" label="Statut" {...table} />
                   <th className="px-5 py-3.5 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {table.pageItems.map((documentData) => (
-                  <tr className="hover:bg-slate-50/70" key={`${documentData.sourceCollection}-${documentData.id}`}>
-                    <td className="px-6 py-4">
-                      <p className="text-sm font-semibold text-slate-900">{documentData.number}</p>
-                      <p className="mt-1 text-xs text-slate-500">{documentLabel(documentData.type)}</p>
-                    </td>
-                    <td className="px-5 py-4 text-sm text-slate-700">{documentData.clientName || '—'}</td>
-                    <td className="px-5 py-4 text-sm text-slate-600">{formatDate(documentData.issueDate)}<span className="mt-1 block text-xs text-slate-400">Échéance : {formatDate(documentData.dueDate)}</span></td>
-                    <td className="px-5 py-4 text-sm font-semibold text-slate-800">{formatCurrency(documentData.totalTTC, company.defaultCurrency)}</td>
-                    <td className="px-5 py-4 text-sm text-slate-600">{documentStatusLabel(documentData)}</td>
-                    <td className="px-5 py-4 text-right">
-                      <div className="flex justify-end gap-1">
-                        {documentData.type === 'deliveryNote' && documentData.sourceCollection === 'sales' && (
-                          documentData.stockDeducted === true || documentStatusLabel(documentData) === 'Livré' ? (
-                            <span className="inline-flex items-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold text-emerald-700">
-                              <PackageCheck size={15} /> Validée
-                            </span>
-                          ) : (
-                            <button
-                              className="inline-flex items-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
-                              disabled={Boolean(deliverySavingId)}
-                              onClick={() => void validateDelivery(documentData)}
-                              type="button"
-                            >
-                              <PackageCheck size={15} />
-                              {deliverySavingId === documentData.id ? 'Validation…' : 'Valider livraison'}
-                            </button>
-                          )
+                {table.pageItems.map((documentData) => {
+                  const status = documentData.__documentStatus
+                  const statusStyle = status === 'Validé'
+                    ? 'bg-emerald-50 text-emerald-800'
+                    : status === 'Annulé'
+                      ? 'bg-red-50 text-red-800'
+                      : 'bg-amber-50 text-amber-800'
+                  const editable = documentData.sourceCollection === 'sales' &&
+                    !isDeliveryValidated(documentData) &&
+                    status !== 'Annulé'
+                  return (
+                    <tr className="transition hover:bg-steel-50/40" key={`${documentData.sourceCollection}-${documentData.id}`}>
+                      <td className="px-5 py-4">
+                        <p className="text-sm font-semibold text-slate-900">{documentData.number || 'Sans numéro'}</p>
+                      </td>
+                      <td className="px-5 py-4 text-sm text-slate-700">{documentData.__typeLabel}</td>
+                      <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-600">
+                        {formatDate(documentData.issueDate)}
+                        {documentData.dueDate && (
+                          <span className="mt-1 block text-xs text-slate-400">
+                            {documentData.type === 'quote' ? 'Validité' : 'Échéance'} · {formatDate(documentData.dueDate)}
+                          </span>
                         )}
-                        {documentData.type === 'deliveryNote' && documentData.sourceCollection === 'salesDocuments' && (
-                          <span className="px-2 py-2 text-xs text-slate-400" title="Le stock de ces documents historiques a pu être déduit à leur création.">Historique</span>
+                      </td>
+                      <td className="px-5 py-4">
+                        <p className="text-sm font-medium text-slate-700">{documentData.__clientName || '—'}</p>
+                        {documentData.clientIce && (
+                          <p className="mt-1 text-xs text-slate-500">ICE · {documentData.clientIce}</p>
                         )}
-                        <button aria-label={`Exporter ${documentData.number} en PDF`} className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-blue-800 hover:bg-blue-50 disabled:opacity-50" disabled={exportingId === documentData.id} onClick={() => void exportDocument(documentData)} type="button">
-                          <Printer size={15} /> {exportingId === documentData.id ? 'Export…' : 'PDF'}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-4 text-sm font-semibold tabular-nums text-slate-800">
+                        {documentData.__totalTTC === null
+                          ? '—'
+                          : formatCurrency(documentData.__totalTTC, company.defaultCurrency)}
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle}`}>
+                          {status === 'Validé'
+                            ? <CheckCircle2 aria-hidden="true" size={13} />
+                            : status === 'Annulé'
+                              ? <ShieldAlert aria-hidden="true" size={13} />
+                              : <AlertCircle aria-hidden="true" size={13} />}
+                          {status}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="flex justify-end gap-1">
+                          <button
+                            aria-label={`Modifier ${documentData.number || 'le document'}`}
+                            className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+                            disabled={!editable}
+                            onClick={() => openEdit(documentData)}
+                            title={!editable
+                              ? documentData.sourceCollection !== 'sales'
+                                ? 'Document historique : dupliquez-le pour créer une nouvelle version'
+                                : isDeliveryValidated(documentData)
+                                  ? 'Une livraison validée ne peut pas être modifiée'
+                                  : 'Un document annulé ne peut pas être modifié'
+                              : 'Modifier'}
+                            type="button"
+                          >
+                            <Pencil aria-hidden="true" size={16} />
+                          </button>
+                          <button
+                            aria-label={`Dupliquer ${documentData.number || 'le document'}`}
+                            className="rounded-lg p-2 text-slate-500 transition hover:bg-steel-50 hover:text-steel-800"
+                            onClick={() => duplicateDocument(documentData)}
+                            title="Dupliquer"
+                            type="button"
+                          >
+                            <Copy aria-hidden="true" size={16} />
+                          </button>
+                          {documentData.type === 'deliveryNote' &&
+                            documentData.sourceCollection === 'sales' &&
+                            !isDeliveryValidated(documentData) &&
+                            ['Directeur', 'SuperAdmin'].includes(role) && (
+                              <button
+                                className="inline-flex items-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-50 disabled:opacity-50"
+                                disabled={Boolean(deliverySavingId)}
+                                onClick={() => void validateDelivery(documentData)}
+                                type="button"
+                              >
+                                {deliverySavingId === documentData.id
+                                  ? <LoaderCircle aria-hidden="true" className="animate-spin" size={14} />
+                                  : <PackageCheck aria-hidden="true" size={15} />}
+                                Valider BL
+                              </button>
+                            )}
+                          <button
+                            aria-label={`Exporter ${documentData.number || 'le document'} en PDF`}
+                            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-semibold text-blue-800 transition hover:bg-blue-50 disabled:opacity-50"
+                            disabled={exportingId === documentData.id}
+                            onClick={() => void exportDocument(documentData)}
+                            type="button"
+                          >
+                            {exportingId === documentData.id
+                              ? <LoaderCircle aria-hidden="true" className="animate-spin" size={15} />
+                              : <FileDown aria-hidden="true" size={15} />}
+                            PDF
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
         )}
-        {!salesLoading && filteredDocuments.length > 0 && <DataTablePagination {...table} />}
+
+        {!isLoading && filteredDocuments.length > 0 && <DataTablePagination {...table} />}
       </section>
+
+      {formOpen && (
+        <SalesDocumentForm
+          calculatedTotals={calculatedTotals}
+          clients={clients}
+          clientsLoading={clientsLoading}
+          company={company}
+          documentOptions={DOCUMENT_OPTIONS}
+          editingDocument={editingDocument}
+          error={error}
+          form={form}
+          linePreviews={linePreviews}
+          numberPreview={numberPreview}
+          numberPreviewError={numberPreviewError}
+          numberPreviewLoading={numberPreviewLoading}
+          onAddLine={addLine}
+          onCancel={() => {
+            if (!saving) {
+              setFormOpen(false)
+              setError('')
+            }
+          }}
+          onClientChange={(clientId) => setForm((current) => ({ ...current, clientId }))}
+          onRemoveLine={removeLine}
+          onSelectStock={selectStockItem}
+          onSetField={handleSetField}
+          onSubmit={saveDocument}
+          onUpdateLine={updateLine}
+          saving={saving}
+          stock={stock}
+          stockLoading={stockLoading}
+          totals={calculatedTotals}
+        />
+      )}
 
       {pdfRequest && (
         <div aria-hidden="true" className="pointer-events-none fixed left-[-10000px] top-0 -z-10">
-          <SalesPdf client={pdfRequest.client} company={company} documentData={pdfRequest.document} ref={pdfRef} />
+          <SalesPdf
+            client={pdfRequest.client}
+            company={company}
+            documentData={pdfRequest.document}
+            ref={pdfRef}
+          />
+        </div>
+      )}
+
+      {saving && (
+        <div
+          aria-live="assertive"
+          aria-modal="true"
+          className="fixed inset-0 z-[70] flex flex-col items-center justify-center gap-4 bg-slate-950/60 p-6 text-center backdrop-blur-sm"
+          role="alertdialog"
+        >
+          <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white text-steel-800 shadow-2xl">
+            <LoaderCircle aria-hidden="true" className="animate-spin" size={30} />
+          </span>
+          <div>
+            <p className="text-base font-semibold text-white">Enregistrement sécurisé</p>
+            <p className="mt-1 text-sm text-slate-200">Validation des lignes et attribution du numéro du document…</p>
+          </div>
         </div>
       )}
     </main>
