@@ -4,12 +4,12 @@ import {
   CalendarDays,
   CheckCircle2,
   Clock3,
-  ClipboardList,
   FileDown,
   Plus,
   Search,
   Pencil,
   Trash2,
+  Wrench,
   X,
 } from 'lucide-react'
 import {
@@ -22,9 +22,11 @@ import {
   updateDoc,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
+import EmptyState from '../components/common/EmptyState'
 import DataTableExportToolbar from '../components/common/DataTableExportToolbar'
 import DataTablePagination from '../components/common/DataTablePagination'
 import SortableTableHeader from '../components/common/SortableTableHeader'
+import TableSkeleton from '../components/common/TableSkeleton'
 import InterventionPdf from '../components/pdf/InterventionPdf'
 import useDataTable from '../hooks/useDataTable'
 import useFirestoreCollection from '../hooks/useFirestoreCollection'
@@ -170,14 +172,8 @@ function getInterventionForm(intervention, stock) {
     clientId: intervention.clientId || '',
     technicianId: intervention.technicianId || '',
     elevatorId: intervention.elevatorId || '',
-    legacyElevatorIdentifier:
-      intervention.elevatorIdentifier && !intervention.elevatorId
-        ? intervention.elevatorIdentifier
-        : '',
-    legacyElevatorBrand:
-      intervention.elevatorBrand && !intervention.elevatorId
-        ? intervention.elevatorBrand
-        : '',
+    legacyElevatorIdentifier: intervention.elevatorReference || intervention.elevatorIdentifier || '',
+    legacyElevatorBrand: intervention.elevatorBrand || '',
     scheduledDate,
     arrivalTime:
       intervention.arrivalTime ||
@@ -412,7 +408,7 @@ export default function Interventions() {
     }
     const invalidPart = form.parts.find((part) => {
       const quantity = Number(part.quantity)
-      return !stockById.has(part.stockId) || !Number.isInteger(quantity) || quantity <= 0
+      return !stockById.has(part.stockId) || !Number.isSafeInteger(quantity) || quantity <= 0
     })
     if (invalidPart) {
       setError('Chaque ligne de pièce doit être liée à un article du stock et avoir une quantité entière supérieure à zéro.')
@@ -424,10 +420,20 @@ export default function Interventions() {
       setActiveStep(3)
       return null
     }
-    const elevator = (Array.isArray(client.elevators) ? client.elevators : [])
-      .find((item) => item.id === form.elevatorId)
-    if (form.elevatorId && !elevator) {
+    const clientElevators = Array.isArray(client.elevators) ? client.elevators : []
+    const elevator = clientElevators.find((item) => item.id === form.elevatorId)
+    if (form.elevatorId && !elevator && clientElevators.length > 0) {
       setError('L’ascenseur sélectionné n’appartient plus au parc de ce client.')
+      setActiveStep(0)
+      return null
+    }
+    if (clientElevators.length > 0 && !elevator) {
+      setError('Sélectionnez l’ascenseur concerné dans le parc du client.')
+      setActiveStep(0)
+      return null
+    }
+    if (clientElevators.length === 0 && !String(form.legacyElevatorIdentifier || '').trim()) {
+      setError('Renseignez le repère de l’ascenseur concerné.')
       setActiveStep(0)
       return null
     }
@@ -607,7 +613,7 @@ export default function Interventions() {
         <div className="flex flex-col gap-4 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
-              <ClipboardList aria-hidden="true" size={19} />
+              <Wrench aria-hidden="true" size={19} />
             </div>
             <div>
               <p className="text-sm font-semibold text-slate-900">Planning des interventions</p>
@@ -662,15 +668,26 @@ export default function Interventions() {
           </p>
         )}
         {loading ? (
-          <p className="px-6 py-12 text-center text-sm text-slate-500">
-            Chargement des interventions…
-          </p>
+          <TableSkeleton columns={6} minWidth={980} />
         ) : filteredInterventions.length === 0 ? (
-          <div className="px-6 py-14 text-center">
-            <p className="text-sm font-medium text-slate-700">
-              {query || typeFilter || statusFilter ? 'Aucun résultat pour cette recherche.' : 'Aucune intervention planifiée.'}
-            </p>
-          </div>
+          <EmptyState
+            actionLabel={query || typeFilter || statusFilter ? 'Effacer les filtres' : 'Créer une intervention'}
+            description={query || typeFilter || statusFilter
+              ? 'Aucune intervention ne correspond à ces critères ; réinitialisez les filtres pour afficher la liste.'
+              : 'Planifiez une mission terrain et affectez-la à un technicien.'}
+            icon={Wrench}
+            onAction={() => {
+              if (query || typeFilter || statusFilter) {
+                setQuery('')
+                setTypeFilter('')
+                setStatusFilter('')
+                table.setPage(1)
+              } else {
+                openNew()
+              }
+            }}
+            title={query || typeFilter || statusFilter ? 'Aucune intervention trouvée' : 'Aucune intervention planifiée'}
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px] text-left">
@@ -779,7 +796,7 @@ export default function Interventions() {
           <section
             aria-labelledby="intervention-form-title"
             aria-modal="true"
-            className="my-auto w-full max-w-4xl rounded-2xl bg-white shadow-2xl"
+            className="my-auto w-full max-w-4xl animate-slide-up rounded-2xl bg-white shadow-2xl"
             role="dialog"
           >
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-7">
@@ -885,7 +902,7 @@ export default function Interventions() {
                             ))}
                           </select>
                         </Field>
-                        <Field label="Ascenseur concerné">
+                        <Field label="Ascenseur concerné *">
                           <select
                             className={inputClass}
                             disabled={!form.clientId || clientElevators.length === 0}
@@ -895,6 +912,7 @@ export default function Interventions() {
                               legacyElevatorIdentifier: '',
                               legacyElevatorBrand: '',
                             }))}
+                            required={clientElevators.length > 0}
                             value={form.elevatorId}
                           >
                             <option value="">
@@ -918,11 +936,12 @@ export default function Interventions() {
                         </Field>
                         {form.clientId && !selectedElevator && clientElevators.length === 0 && (
                           <>
-                            <Field label="Repère historique de l’ascenseur">
+                            <Field label="Repère historique de l’ascenseur *">
                               <input
                                 className={inputClass}
                                 onChange={(event) => setForm((current) => ({ ...current, legacyElevatorIdentifier: event.target.value }))}
                                 placeholder="Ascenseur A, Bloc B…"
+                                required
                                 value={form.legacyElevatorIdentifier}
                               />
                             </Field>

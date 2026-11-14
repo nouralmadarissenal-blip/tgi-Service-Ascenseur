@@ -88,7 +88,7 @@ export default function ContractForm({
       <section
         aria-labelledby="contract-form-title"
         aria-modal="true"
-        className="my-auto w-full max-w-4xl rounded-2xl border border-white bg-white/95 shadow-2xl shadow-slate-950/25 backdrop-blur-xl"
+        className="my-auto w-full max-w-4xl animate-slide-up rounded-2xl border border-white bg-white/95 shadow-2xl shadow-slate-950/25 backdrop-blur-xl"
         role="dialog"
       >
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-7">
@@ -157,7 +157,7 @@ export default function ContractForm({
               </select>
             </label>
             <label>
-              <span className="mb-1.5 block text-xs font-semibold text-slate-700">Ascenseur concerné</span>
+              <span className="mb-1.5 block text-xs font-semibold text-slate-700">Ascenseur concerné *</span>
               <select
                 className={inputClass}
                 disabled={!selectedClient || elevators.length === 0}
@@ -189,9 +189,18 @@ export default function ContractForm({
                 ))}
               </select>
               {selectedClient && elevators.length === 0 && (
-                <span className="mt-1 block text-xs text-slate-500">
-                  Aucun ascenseur n’est enregistré dans le parc de ce client.
-                </span>
+                <>
+                  <span className="mt-1 block text-xs text-slate-500">
+                    Aucun ascenseur n’est enregistré dans le parc de ce client. Saisissez son repère historique.
+                  </span>
+                  <input
+                    className={`${inputClass} mt-2`}
+                    onChange={(event) => setField('elevatorReference', event.target.value)}
+                    placeholder="Ex. Ascenseur A · Bloc B"
+                    required
+                    value={contract.elevatorReference || ''}
+                  />
+                </>
               )}
             </label>
             <label className="sm:col-span-2">

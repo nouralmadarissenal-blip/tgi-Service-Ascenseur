@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, CheckCircle2, FileDown, FilePlus2, FileText, Pencil, Search, Trash2 } from 'lucide-react'
+import { AlertCircle, CheckCircle2, FileDown, FilePlus2, FileText, Pencil, Search, ShieldCheck, Trash2 } from 'lucide-react'
 import {
   addDoc,
   collection,
@@ -11,10 +11,12 @@ import {
   updateDoc,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
+import EmptyState from '../components/common/EmptyState'
 import { getContractTermState } from '../utils/contractTermState'
 import DataTableExportToolbar from '../components/common/DataTableExportToolbar'
 import DataTablePagination from '../components/common/DataTablePagination'
 import SortableTableHeader from '../components/common/SortableTableHeader'
+import TableSkeleton from '../components/common/TableSkeleton'
 import ContractForm from '../components/contracts/ContractForm'
 import ContractPdf from '../components/pdf/ContractPdf'
 import { getDefaultClauses } from '../components/contracts/contractClauses'
@@ -238,8 +240,12 @@ export default function Contracts() {
     const elevator = clientElevators.find((item, index) =>
       String(item.id || item.reference || `elevator-${index}`) === form.elevatorId,
     )
-    if (form.elevatorId && !elevator) {
+    if (form.elevatorId && !elevator && clientElevators.length > 0) {
       setError('L’ascenseur sélectionné n’appartient plus au parc de ce client. Sélectionnez-le à nouveau.')
+      return
+    }
+    if (!elevator && !String(form.elevatorReference || '').trim()) {
+      setError('Renseignez le repère de l’ascenseur concerné avant d’enregistrer le contrat.')
       return
     }
     const priceHT = form.priceHT === '' ? null : Number(form.priceHT)
@@ -250,6 +256,7 @@ export default function Contracts() {
       !Number.isFinite(taxRate) ||
       taxRate < 0 ||
       taxRate > 100 ||
+      !Number.isSafeInteger(Math.round((priceHT ?? 0) * 100)) ||
       !String(form.slaResponseTime || '').trim() ||
       !BILLING_FREQUENCIES.includes(form.billingFrequency) ||
       !Number.isInteger(noticeMonths) ||
@@ -259,6 +266,8 @@ export default function Contracts() {
       !form.endDate ||
       form.endDate < form.startDate ||
       priceHT === null ||
+      !String(form.reference || '').trim() ||
+      !String(form.subject || '').trim() ||
       !String(form.paymentTerms || '').trim() ||
       !String(form.clauses || '').trim()
     ) {
@@ -276,9 +285,9 @@ export default function Contracts() {
       clientAddress: client.address || '',
       clientIce: client.ice || '',
       elevatorId: elevator ? form.elevatorId : '',
-      elevatorReference: elevator?.reference || '',
-      elevatorBrand: elevator?.brand || '',
-      elevatorType: elevator?.type || '',
+      elevatorReference: elevator?.reference || String(form.elevatorReference || '').trim(),
+      elevatorBrand: elevator?.brand || String(form.elevatorBrand || '').trim(),
+      elevatorType: elevator?.type || String(form.elevatorType || '').trim(),
       priceHT,
       taxRate,
       slaResponseTime: form.slaResponseTime.trim(),
@@ -416,7 +425,7 @@ export default function Contracts() {
         <div className="flex flex-col gap-4 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
-              <FileText aria-hidden="true" size={19} />
+              <ShieldCheck aria-hidden="true" size={19} />
             </div>
             <div>
               <p className="text-sm font-semibold text-slate-900">Gestion des contrats</p>
@@ -468,15 +477,26 @@ export default function Contracts() {
         )}
 
         {loading ? (
-          <p className="px-6 py-12 text-center text-sm text-slate-500">
-            Chargement des contrats…
-          </p>
+          <TableSkeleton columns={6} minWidth={880} />
         ) : filteredContracts.length === 0 ? (
-          <div className="px-6 py-14 text-center">
-            <p className="text-sm font-medium text-slate-700">
-              {query || typeFilter || statusFilter ? 'Aucun résultat pour cette recherche.' : 'Aucun contrat enregistré.'}
-            </p>
-          </div>
+          <EmptyState
+            actionLabel={query || typeFilter || statusFilter ? 'Effacer les filtres' : 'Créer un contrat'}
+            description={query || typeFilter || statusFilter
+              ? 'Aucun contrat ne correspond à ces critères ; vous pouvez réinitialiser les filtres.'
+              : 'Associez un contrat à un client et à un équipement pour suivre sa durée et ses engagements.'}
+            icon={ShieldCheck}
+            onAction={() => {
+              if (query || typeFilter || statusFilter) {
+                setQuery('')
+                setTypeFilter('')
+                setStatusFilter('')
+                table.setPage(1)
+              } else {
+                openNew()
+              }
+            }}
+            title={query || typeFilter || statusFilter ? 'Aucun contrat trouvé' : 'Aucun contrat enregistré'}
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-220 text-left">

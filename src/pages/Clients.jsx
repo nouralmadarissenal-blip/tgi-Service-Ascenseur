@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
+  Building,
   CheckCircle2,
   ChevronDown,
   FileDown,
@@ -11,7 +12,6 @@ import {
   Plus,
   Search,
   Trash2,
-  Users,
   X,
 } from 'lucide-react'
 import {
@@ -25,10 +25,12 @@ import {
   updateDoc,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
+import EmptyState from '../components/common/EmptyState'
 import DataTableExportToolbar from '../components/common/DataTableExportToolbar'
 import ClientPdf from '../components/pdf/ClientPdf'
 import DataTablePagination from '../components/common/DataTablePagination'
 import SortableTableHeader from '../components/common/SortableTableHeader'
+import TableSkeleton from '../components/common/TableSkeleton'
 import useDataTable from '../hooks/useDataTable'
 import useFirestoreCollection from '../hooks/useFirestoreCollection'
 
@@ -502,7 +504,7 @@ export default function Clients() {
           </p>
         </div>
         <button
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-800 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-900/15 transition hover:bg-blue-900"
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-steel-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-steel-900/15 transition hover:-translate-y-0.5 hover:bg-steel-800"
           onClick={openNewClient}
           type="button"
         >
@@ -515,7 +517,7 @@ export default function Clients() {
         <div className="flex flex-col gap-4 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
-              <Users size={19} />
+              <Building size={19} />
             </div>
             <div>
               <p className="text-sm font-semibold text-slate-900">Tous les clients</p>
@@ -582,24 +584,26 @@ export default function Clients() {
         )}
 
         {loading ? (
-          <p className="px-6 py-12 text-center text-sm text-slate-500">Chargement des clients…</p>
+          <TableSkeleton columns={7} minWidth={980} />
         ) : filteredClients.length === 0 ? (
-          <div className="px-6 py-14 text-center">
-            <p className="text-sm font-medium text-slate-700">
-              {query || typeFilter || contractStatusFilter
-                ? 'Aucun client ne correspond à la recherche et aux filtres.'
-                : 'Aucun client pour le moment.'}
-            </p>
-            {!query && !typeFilter && !contractStatusFilter && (
-              <button
-                className="mt-3 text-sm font-semibold text-blue-700 hover:text-blue-900"
-                onClick={openNewClient}
-                type="button"
-              >
-                Ajouter votre premier client
-              </button>
-            )}
-          </div>
+          <EmptyState
+            actionLabel={query || typeFilter || contractStatusFilter ? 'Effacer les filtres' : 'Ajouter un client'}
+            description={query || typeFilter || contractStatusFilter
+              ? 'Essayez une autre recherche ou réinitialisez les filtres actifs.'
+              : 'Créez une fiche client pour associer les contacts, contrats et ascenseurs du site.'}
+            icon={Building}
+            onAction={() => {
+              if (query || typeFilter || contractStatusFilter) {
+                setQuery('')
+                setTypeFilter('')
+                setContractStatusFilter('')
+                table.setPage(1)
+              } else {
+                openNewClient()
+              }
+            }}
+            title={query || typeFilter || contractStatusFilter ? 'Aucun client trouvé' : 'Aucun client enregistré'}
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px] text-left">
@@ -800,7 +804,7 @@ export default function Clients() {
           <section
             aria-labelledby="client-form-title"
             aria-modal="true"
-            className="my-auto w-full max-w-5xl rounded-2xl bg-white shadow-2xl"
+            className="my-auto w-full max-w-5xl animate-slide-up rounded-2xl bg-white shadow-2xl"
             role="dialog"
           >
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-7">

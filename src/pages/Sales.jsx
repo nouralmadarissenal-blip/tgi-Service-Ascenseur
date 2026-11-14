@@ -9,7 +9,9 @@ import {
 } from 'firebase/firestore'
 import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
+import EmptyState from '../components/common/EmptyState'
 import DataTablePagination from '../components/common/DataTablePagination'
+import TableSkeleton from '../components/common/TableSkeleton'
 import SalesPdf from '../components/pdf/SalesPdf'
 import useDataTable from '../hooks/useDataTable'
 import useFirestoreCollection from '../hooks/useFirestoreCollection'
@@ -241,7 +243,17 @@ export default function Sales() {
       const amounts = tryCalculateLineAmounts(unitPrice, line.quantity, taxRate)
       return amounts ? [amounts] : []
     })
-    return sumLineAmounts(validLines)
+    try {
+      return { ...sumLineAmounts(validLines), error: '' }
+    } catch (sumError) {
+      if (!(sumError instanceof RangeError)) throw sumError
+      return {
+        totalHT: 0,
+        totalTax: 0,
+        totalTTC: 0,
+        error: 'Le total dépasse la limite de calcul prise en charge. Réduisez les quantités ou les montants.',
+      }
+    }
   }, [company, form.items, stockById])
 
   const updateLine = (index, changes) => {
@@ -285,7 +297,7 @@ export default function Sales() {
       setError('Ajoutez au moins une ligne et sélectionnez un article sur chaque ligne.')
       return
     }
-    if (form.items.some((line) => !Number.isInteger(Number(line.quantity)) || Number(line.quantity) <= 0)) {
+    if (form.items.some((line) => !Number.isSafeInteger(Number(line.quantity)) || Number(line.quantity) <= 0)) {
       setError('La quantité de chaque ligne doit être un entier supérieur à zéro.')
       return
     }
@@ -295,6 +307,10 @@ export default function Sales() {
     }
     if (form.items.some((line) => !getVatOptions(company).includes(Number(line.taxRate)))) {
       setError('Sélectionnez un taux de TVA autorisé sur chaque ligne.')
+      return
+    }
+    if (calculatedTotals.error) {
+      setError(calculatedTotals.error)
       return
     }
 
@@ -511,7 +527,7 @@ export default function Sales() {
       )}
       {notice && <p className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{notice}</p>}
 
-      <section className="mt-8 rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="mt-8 animate-slide-up rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-100 px-5 py-5 sm:px-7">
           <div className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><FilePlus2 size={19} /></span>
@@ -669,13 +685,18 @@ export default function Sales() {
               </p>
             )}
             <div className="ml-auto rounded-xl bg-slate-50 px-5 py-4 sm:min-w-[20rem]">
+              {calculatedTotals.error && (
+                <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700" role="alert">
+                  {calculatedTotals.error}
+                </p>
+              )}
               <p className="flex justify-between gap-8 text-sm text-slate-600"><span>Total HT</span><strong>{formatCurrency(calculatedTotals.totalHT, company.defaultCurrency)}</strong></p>
               <p className="mt-2 flex justify-between gap-8 text-sm text-slate-600"><span>Total TVA</span><strong>{formatCurrency(calculatedTotals.totalTax, company.defaultCurrency)}</strong></p>
               <p className="mt-3 flex justify-between gap-8 border-t border-slate-200 pt-3 text-base font-bold text-blue-900"><span>Total TTC</span><strong>{formatCurrency(calculatedTotals.totalTTC, company.defaultCurrency)}</strong></p>
             </div>
           </div>
           <div className="flex justify-end border-t border-slate-100 pt-4">
-            <button className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-800 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-900/15 hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-60" disabled={saving || clientsLoading || stockLoading || clients.length === 0 || stock.length === 0} type="submit">
+            <button className="inline-flex items-center justify-center gap-2 rounded-xl bg-steel-700 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-steel-900/15 transition hover:-translate-y-0.5 hover:bg-steel-800 disabled:cursor-not-allowed disabled:opacity-60" disabled={saving || clientsLoading || stockLoading || clients.length === 0 || stock.length === 0 || Boolean(calculatedTotals.error)} type="submit">
               <FilePlus2 size={17} /> {saving ? 'Enregistrement…' : 'Enregistrer et générer le PDF'}
             </button>
           </div>
@@ -703,9 +724,25 @@ export default function Sales() {
           </div>
         </div>
         {salesLoading ? (
-          <p className="px-6 py-10 text-center text-sm text-slate-500">Chargement des documents…</p>
+          <TableSkeleton columns={6} minWidth={720} />
         ) : filteredDocuments.length === 0 ? (
-          <p className="px-6 py-10 text-center text-sm text-slate-500">Aucun document pour le moment.</p>
+          <EmptyState
+            actionLabel={query || typeFilter ? 'Effacer les filtres' : 'Créer un document'}
+            description={query || typeFilter
+              ? 'Essayez une autre recherche ou effacez les filtres actifs.'
+              : 'Préparez un devis, un bon de livraison ou une facture à partir du formulaire.'}
+            icon={FileText}
+            onAction={() => {
+              if (query || typeFilter) {
+                setQuery('')
+                setTypeFilter('')
+                table.setPage(1)
+              } else {
+                window.scrollTo({ top: 0, behavior: 'smooth' })
+              }
+            }}
+            title={query || typeFilter ? 'Aucun document trouvé' : 'Aucun document de vente'}
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[45rem] text-left">

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, CheckCircle2, FileDown, Package, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { AlertTriangle, ArrowUpDown, CheckCircle2, FileDown, Package, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import {
   addDoc,
   collection,
@@ -12,8 +12,10 @@ import {
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import DataTableExportToolbar from '../components/common/DataTableExportToolbar'
+import EmptyState from '../components/common/EmptyState'
 import DataTablePagination from '../components/common/DataTablePagination'
 import SortableTableHeader from '../components/common/SortableTableHeader'
+import TableSkeleton from '../components/common/TableSkeleton'
 import InventoryPdf from '../components/pdf/InventoryPdf'
 import useDataTable from '../hooks/useDataTable'
 import useFirestoreCollection from '../hooks/useFirestoreCollection'
@@ -176,16 +178,25 @@ export default function Stock() {
     const vatRate = Number(form.vatRate)
     const alertThreshold = Number(form.alertThreshold)
     if (
-      !Number.isInteger(quantity) ||
+      !form.name.trim() ||
+      !CATEGORIES.includes(form.category) ||
+      form.quantity === '' ||
+      form.purchasePrice === '' ||
+      form.salePrice === '' ||
+      form.vatRate === '' ||
+      form.alertThreshold === '' ||
+      !Number.isSafeInteger(quantity) ||
       quantity < 0 ||
       !Number.isFinite(purchasePrice) ||
       purchasePrice < 0 ||
+      !Number.isSafeInteger(Math.round(purchasePrice * 100)) ||
       !Number.isFinite(salePrice) ||
       salePrice < 0 ||
+      !Number.isSafeInteger(Math.round(salePrice * 100)) ||
       !Number.isFinite(vatRate) ||
       vatRate < 0 ||
       vatRate > 100 ||
-      !Number.isInteger(alertThreshold) ||
+      !Number.isSafeInteger(alertThreshold) ||
       alertThreshold < 0
     ) {
       setError('Vérifiez les quantités, les prix, le taux de TVA (0 à 100 %) et le seuil d’alerte.')
@@ -290,7 +301,7 @@ export default function Stock() {
         <div className="flex flex-col gap-4 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
-              <Package aria-hidden="true" size={19} />
+              <ArrowUpDown aria-hidden="true" size={19} />
             </div>
             <div>
               <p className="text-sm font-semibold text-slate-900">Inventaire des pièces</p>
@@ -350,13 +361,26 @@ export default function Stock() {
         )}
 
         {loading ? (
-          <p className="px-6 py-12 text-center text-sm text-slate-500">Chargement de l’inventaire…</p>
+          <TableSkeleton columns={9} minWidth={1080} />
         ) : filteredItems.length === 0 ? (
-          <div className="px-6 py-14 text-center">
-            <p className="text-sm font-medium text-slate-700">
-              {query || categoryFilter || stockLevelFilter ? 'Aucune pièce ne correspond aux filtres.' : 'Aucune pièce dans l’inventaire.'}
-            </p>
-          </div>
+          <EmptyState
+            actionLabel={query || categoryFilter || stockLevelFilter ? 'Effacer les filtres' : 'Ajouter une pièce'}
+            description={query || categoryFilter || stockLevelFilter
+              ? 'Modifiez vos critères ou effacez les filtres pour retrouver les articles.'
+              : 'Créez une première fiche pour suivre les quantités, les seuils et les prix.'}
+            icon={Package}
+            onAction={() => {
+              if (query || categoryFilter || stockLevelFilter) {
+                setQuery('')
+                setCategoryFilter('')
+                setStockLevelFilter('')
+                table.setPage(1)
+              } else {
+                openNew()
+              }
+            }}
+            title={query || categoryFilter || stockLevelFilter ? 'Aucune pièce trouvée' : 'Inventaire vide'}
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-240 text-left">
@@ -377,11 +401,11 @@ export default function Stock() {
                 {table.pageItems.map((item) => {
                   const low = isLowStock(item)
                   return (
-                    <tr className={`transition hover:bg-slate-50/70 ${low ? 'bg-red-50/30' : ''}`} key={item.id}>
+                    <tr className={`transition hover:bg-slate-50/70 ${low ? 'bg-safety-50/60' : ''}`} key={item.id}>
                       <td className="px-6 py-4">
                         <p className="text-sm font-semibold text-slate-900">{item.name}</p>
                         <span className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                          low ? 'bg-red-50 text-red-700 ring-1 ring-red-600/15' : 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/15'
+                          low ? 'bg-safety-50 text-safety-700 ring-1 ring-safety-600/15' : 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/15'
                         }`}>
                           {low ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />}
                           {low
@@ -432,7 +456,7 @@ export default function Stock() {
 
       {formOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/50 p-3 sm:p-6">
-          <section aria-labelledby="stock-form-title" aria-modal="true" className="my-auto w-full max-w-xl rounded-2xl bg-white shadow-2xl" role="dialog">
+          <section aria-labelledby="stock-form-title" aria-modal="true" className="my-auto w-full max-w-xl animate-slide-up rounded-2xl bg-white shadow-2xl" role="dialog">
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-7">
               <div>
                 <h2 className="text-lg font-semibold text-slate-900" id="stock-form-title">
@@ -464,7 +488,7 @@ export default function Stock() {
               </label>
               <label className="block">
                 <span className="mb-1.5 block text-xs font-semibold text-slate-700">Catégorie *</span>
-                <select className={inputClass} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))} value={form.category}>
+                <select className={inputClass} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))} required value={form.category}>
                   {CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
                 </select>
               </label>
@@ -501,7 +525,7 @@ export default function Stock() {
                 <button className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50" onClick={() => setFormOpen(false)} type="button">
                   Annuler
                 </button>
-                <button className="rounded-xl bg-blue-800 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-900 disabled:opacity-60" disabled={saving} type="submit">
+                <button className="rounded-xl bg-steel-700 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-steel-800 disabled:opacity-60" disabled={saving} type="submit">
                   {saving ? 'Enregistrement…' : editingId ? 'Enregistrer' : 'Créer la pièce'}
                 </button>
               </div>
