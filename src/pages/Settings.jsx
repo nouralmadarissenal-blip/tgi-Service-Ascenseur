@@ -35,7 +35,7 @@ const initialSettings = {
   rib: '',
   swiftBic: '',
   logoBase64: '',
-  logoUrl: '',
+  logoUrl: '/logo.jpeg',
   stampBase64: '',
   autoStampEnabled: false,
   documentFooter: '',
@@ -50,18 +50,18 @@ const initialSettings = {
 }
 
 const tabs = [
-  { id: 'general', label: 'Informations générales', icon: Building2 },
-  { id: 'legal', label: 'Légal & bancaire', icon: Landmark },
-  { id: 'documents', label: 'Personnalisation & documents', icon: ImagePlus },
-  { id: 'preferences', label: 'Préférences métier', icon: Settings2 },
+  { id: 'general', label: 'Entreprise', icon: Building2 },
+  { id: 'legal', label: 'Légal & banque', icon: Landmark },
+  { id: 'documents', label: 'Identité visuelle', icon: ImagePlus },
+  { id: 'preferences', label: 'Documents & finance', icon: Settings2 },
 ]
-
 const legalForms = ['SARL', 'SARL AU', 'SA', 'SNC', 'SCS', 'SCA', 'Auto-entrepreneur', 'Autre']
 const allowedImageTypes = ['image/png', 'image/jpeg', 'image/webp']
+const supportedCurrencies = ['MAD', 'EUR', 'USD']
 const maxImageBytes = 700 * 1024
 const maxCombinedImageCharacters = 900 * 1024
 const inputClass =
-  'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition duration-200 placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50'
+  'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition duration-200 placeholder:text-slate-400 focus:border-steel-500 focus:ring-4 focus:ring-steel-100 disabled:cursor-not-allowed disabled:bg-slate-50'
 
 function TextField({ className = '', form, label, name, onChange, placeholder = '', type = 'text', ...props }) {
   return (
@@ -100,13 +100,26 @@ function getSettingsForm(savedSettings = {}) {
   return {
     ...initialSettings,
     ...savedSettings,
+    logoUrl: typeof savedSettings.logoUrl === 'string'
+      ? savedSettings.logoUrl
+      : initialSettings.logoUrl,
+    logoBase64: typeof savedSettings.logoBase64 === 'string' ? savedSettings.logoBase64 : '',
+    stampBase64: typeof savedSettings.stampBase64 === 'string' ? savedSettings.stampBase64 : '',
+    legalName: savedSettings.legalName || '',
+    companyName: savedSettings.companyName || initialSettings.companyName,
     legalForm: savedSettings.legalForm || initialSettings.legalForm,
+    documentFooter: typeof savedSettings.documentFooter === 'string' ? savedSettings.documentFooter : '',
+    defaultTermsAndConditions: typeof savedSettings.defaultTermsAndConditions === 'string'
+      ? savedSettings.defaultTermsAndConditions
+      : '',
     phone: savedSettings.phone || savedSettings.phone1 || savedSettings.telephoneFixed || '',
     mobileEmergency:
       savedSettings.mobileEmergency || savedSettings.emergencyMobile || savedSettings.phone2 || '',
     whatsapp: savedSettings.whatsapp || savedSettings.whatsappPro || '',
     defaultVatRate: savedSettings.defaultVatRate ?? initialSettings.defaultVatRate,
-    defaultCurrency: savedSettings.defaultCurrency || initialSettings.defaultCurrency,
+    defaultCurrency: supportedCurrencies.includes(savedSettings.defaultCurrency)
+      ? savedSettings.defaultCurrency
+      : initialSettings.defaultCurrency,
     defaultQuoteValidityMonths:
       savedSettings.defaultQuoteValidityMonths ?? initialSettings.defaultQuoteValidityMonths,
     invoicePrefix: savedSettings.invoicePrefix || initialSettings.invoicePrefix,
@@ -128,6 +141,7 @@ export default function Settings() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const toastTimeout = useRef(null)
+  const hasLocalChanges = useRef(false)
 
   useEffect(() => {
     const unsubscribe = onSnapshot(
@@ -135,9 +149,11 @@ export default function Settings() {
       (snapshot) => {
         const savedSettings = snapshot.exists() ? snapshot.data() : {}
         const nextForm = getSettingsForm(savedSettings)
-        setForm(nextForm)
-        setLogoPreview(nextForm.logoBase64 || nextForm.logoUrl)
-        setStampPreview(nextForm.stampBase64)
+        if (!hasLocalChanges.current) {
+          setForm(nextForm)
+          setLogoPreview(nextForm.logoBase64 || nextForm.logoUrl)
+          setStampPreview(nextForm.stampBase64)
+        }
         setError('')
         setLoading(false)
       },
@@ -159,12 +175,13 @@ export default function Settings() {
 
   const updateField = (event) => {
     const { name, value, type, checked } = event.target
+    hasLocalChanges.current = true
     setForm((current) => ({ ...current, [name]: type === 'checkbox' ? checked : value }))
     setError('')
     setNotice('')
   }
 
-  const selectImage = (field) => (event) => {
+  const selectImage = (field, event) => {
     const selectedFile = event.target.files?.[0]
     event.target.value = ''
     if (!selectedFile) return
@@ -178,6 +195,7 @@ export default function Settings() {
       return
     }
 
+    hasLocalChanges.current = true
     setError('')
     setNotice('')
     setReadingMedia(field)
@@ -209,6 +227,7 @@ export default function Settings() {
   }
 
   const clearImage = (field) => {
+    hasLocalChanges.current = true
     setForm((current) => ({
       ...current,
       [field]: '',
@@ -225,7 +244,10 @@ export default function Settings() {
     event.preventDefault()
     setError('')
     setNotice('')
-    if (!String(form.companyName).trim() || !String(form.legalForm).trim()) {
+    if (
+      !String(form.companyName || '').trim() ||
+      !legalForms.includes(form.legalForm)
+    ) {
       setError('Le nom de l’entreprise et sa forme juridique sont obligatoires.')
       setActiveTab('general')
       return
@@ -233,22 +255,52 @@ export default function Settings() {
 
     const vatRate = Number(form.defaultVatRate)
     const quoteValidity = Number(form.defaultQuoteValidityMonths)
-    if (!Number.isFinite(vatRate) || vatRate < 0 || vatRate > 100) {
+    const email = String(form.email || '').trim()
+    const website = String(form.website || '').trim()
+    const rib = String(form.rib || '').replace(/\s/g, '')
+    const currency = String(form.defaultCurrency || '')
+    const validWebsite = (value) => {
+      if (!value) return true
+      try {
+        const url = new URL(value)
+        return url.protocol === 'http:' || url.protocol === 'https:'
+      } catch {
+        return false
+      }
+    }
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setError('Saisissez une adresse e-mail de contact valide.')
+      setActiveTab('general')
+      return
+    }
+    if (!validWebsite(website)) {
+      setError('Le site web doit être une adresse HTTP ou HTTPS valide.')
+      setActiveTab('general')
+      return
+    }
+    if (form.defaultVatRate === '' || !Number.isFinite(vatRate) || vatRate < 0 || vatRate > 100) {
       setError('Le taux de TVA doit être compris entre 0 et 100 %.')
       setActiveTab('preferences')
       return
     }
-    if (!Number.isInteger(quoteValidity) || quoteValidity < 1 || quoteValidity > 36) {
+    if (!Number.isSafeInteger(quoteValidity) || quoteValidity < 1 || quoteValidity > 36) {
       setError('La validité des devis doit être comprise entre 1 et 36 mois.')
       setActiveTab('preferences')
       return
     }
-    if (form.rib.trim() && !/^\d{24}$/.test(form.rib.trim())) {
+    if (rib && !/^\d{24}$/.test(rib)) {
       setError('Le RIB doit contenir exactement 24 chiffres.')
       setActiveTab('legal')
       return
     }
-    if (form.swiftBic.trim() && !/^[A-Za-z0-9]{8}(?:[A-Za-z0-9]{3})?$/.test(form.swiftBic.trim())) {
+    if (!supportedCurrencies.includes(currency)) {
+      setError('Sélectionnez une monnaie prise en charge.')
+      setActiveTab('preferences')
+      return
+    }
+    const swiftBic = String(form.swiftBic || '').trim()
+    if (swiftBic && !/^[A-Za-z0-9]{8}(?:[A-Za-z0-9]{3})?$/.test(swiftBic)) {
       setError('Le code SWIFT/BIC doit contenir 8 ou 11 caractères alphanumériques.')
       setActiveTab('legal')
       return
@@ -273,6 +325,10 @@ export default function Settings() {
           typeof value === 'string' ? value.trim() : value,
         ]),
       )
+      settings.rib = rib
+      settings.swiftBic = swiftBic
+      settings.email = email
+      settings.website = website
       await setDoc(
         doc(db, 'settings', 'company'),
         {
@@ -288,6 +344,10 @@ export default function Settings() {
         },
         { merge: true },
       )
+      hasLocalChanges.current = false
+      setForm(getSettingsForm(settings))
+      setLogoPreview(settings.logoBase64 || settings.logoUrl)
+      setStampPreview(settings.stampBase64)
       setNotice('Les paramètres de la société ont été enregistrés.')
     } catch (saveError) {
       setError(
@@ -302,7 +362,7 @@ export default function Settings() {
 
   if (loading) {
     return (
-      <main className="min-h-full bg-gray-50 px-4 py-10 sm:px-8">
+      <main className="min-h-full bg-slate-50 px-4 py-10 sm:px-8">
         <div className="mx-auto max-w-6xl animate-pulse rounded-2xl bg-white p-8 shadow-sm">
           <div className="h-5 w-40 rounded bg-slate-200" />
           <div className="mt-4 h-9 w-72 rounded bg-slate-200" />
@@ -315,11 +375,11 @@ export default function Settings() {
   const activeTabConfig = tabs.find((tab) => tab.id === activeTab) || tabs[0]
 
   return (
-    <main className="min-h-full bg-gray-50 px-4 py-8 sm:px-8 sm:py-10">
+    <main className="min-h-full bg-slate-50 px-4 py-8 sm:px-8 sm:py-10">
       <div className="mx-auto max-w-6xl">
         <header className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-700">Administration · Configuration</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-steel-700">Administration · Configuration</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Paramètres de la société</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
               Gérez les coordonnées, les documents et les règles métier utilisés par TGI Manager Pro.
@@ -341,7 +401,7 @@ export default function Settings() {
                     aria-selected={activeTab === id}
                     className={`flex min-h-11 items-center gap-2 rounded-xl px-3 py-2.5 text-left text-xs font-semibold transition duration-200 sm:text-sm ${
                       activeTab === id
-                        ? 'bg-white text-blue-800 shadow-sm ring-1 ring-slate-200'
+                        ? 'bg-white text-steel-800 shadow-sm ring-1 ring-slate-200'
                         : 'text-slate-500 hover:bg-white/70 hover:text-slate-800'
                     }`}
                     id={`settings-tab-${id}`}
@@ -366,7 +426,7 @@ export default function Settings() {
               tabIndex={0}
             >
               <div className="mb-6 flex items-start gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-steel-50 text-steel-700">
                   <activeTabConfig.icon aria-hidden="true" size={19} />
                 </span>
                 <div>
@@ -427,9 +487,9 @@ export default function Settings() {
                 <div className="space-y-7">
                   <div className="grid gap-5 lg:grid-cols-2">
                     {[
-                      { field: 'logoBase64', title: 'Logo de l’entreprise', preview: logoPreview, onSelect: selectImage('logoBase64'), hint: 'Logo affiché dans les en-têtes PDF.' },
-                      { field: 'stampBase64', title: 'Cachet / signature', preview: stampPreview, onSelect: selectImage('stampBase64'), hint: 'Cachet apposé aux factures, bons de livraison et reçus.' },
-                    ].map(({ field, title, preview, onSelect, hint }) => (
+                      { field: 'logoBase64', title: 'Logo de l’entreprise', preview: logoPreview, hint: 'Logo affiché dans les en-têtes PDF.' },
+                      { field: 'stampBase64', title: 'Cachet / signature', preview: stampPreview, hint: 'Cachet apposé aux factures, bons de livraison et reçus.' },
+                    ].map(({ field, title, preview, hint }) => (
                       <section className="rounded-xl border border-slate-200 bg-slate-50/70 p-4" key={field}>
                         <div className="flex items-center justify-between gap-3">
                           <div>
@@ -458,7 +518,7 @@ export default function Settings() {
                             accept="image/png,image/jpeg,image/webp"
                             className="block w-full text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:font-semibold file:text-blue-800 hover:file:bg-blue-100"
                             disabled={Boolean(readingMedia)}
-                            onChange={onSelect}
+                            onChange={(event) => selectImage(field, event)}
                             type="file"
                           />
                         </label>
@@ -482,34 +542,6 @@ export default function Settings() {
                     </span>
                   </label>
 
-                  <div className="grid gap-5 border-t border-slate-100 pt-6 lg:grid-cols-2">
-                    <div>
-                      <TextAreaField
-                        className="block"
-                        form={form}
-                        label="Pied de page des documents"
-                        maxLength={1200}
-                        name="documentFooter"
-                        onChange={updateField}
-                        placeholder="Mentions légales, adresse et conditions de règlement…"
-                        rows={5}
-                      />
-                      <p className="mt-1 text-right text-xs text-slate-400">{form.documentFooter.length}/1200</p>
-                    </div>
-                    <div>
-                      <TextAreaField
-                        className="block"
-                        form={form}
-                        label="Conditions générales de vente par défaut"
-                        maxLength={10000}
-                        name="defaultTermsAndConditions"
-                        onChange={updateField}
-                        placeholder="Conditions proposées par défaut dans les devis et contrats…"
-                        rows={5}
-                      />
-                      <p className="mt-1 text-xs leading-5 text-slate-500">Modèle éditable à adapter et faire valider avant utilisation contractuelle.</p>
-                    </div>
-                  </div>
                 </div>
               )}
 
@@ -540,6 +572,34 @@ export default function Settings() {
                       <TextField form={form} label="Préfixe des bons de commande" maxLength={12} name="purchaseOrderPrefix" onChange={updateField} required placeholder="BC-" />
                     </div>
                   </div>
+                  <div className="grid gap-5 border-t border-slate-100 pt-6 lg:grid-cols-2">
+                    <div>
+                      <TextAreaField
+                        className="block"
+                        form={form}
+                        label="Texte légal du pied de page des documents"
+                        maxLength={1200}
+                        name="documentFooter"
+                        onChange={updateField}
+                        placeholder="Mentions légales, adresse et conditions de règlement…"
+                        rows={5}
+                      />
+                      <p className="mt-1 text-right text-xs text-slate-400">{form.documentFooter.length}/1200</p>
+                    </div>
+                    <div>
+                      <TextAreaField
+                        className="block"
+                        form={form}
+                        label="Conditions générales de vente par défaut"
+                        maxLength={10000}
+                        name="defaultTermsAndConditions"
+                        onChange={updateField}
+                        placeholder="Conditions proposées par défaut dans les devis et contrats…"
+                        rows={5}
+                      />
+                      <p className="mt-1 text-xs leading-5 text-slate-500">Modèle éditable à adapter et faire valider avant utilisation contractuelle.</p>
+                    </div>
+                  </div>
                 </div>
               )}
             </section>
@@ -552,7 +612,7 @@ export default function Settings() {
               <div className="flex items-center justify-end gap-3">
                 {error && <p className="mr-auto max-w-md text-xs text-red-700" role="alert">{error}</p>}
                 <button
-                  className="inline-flex min-w-48 items-center justify-center gap-2 rounded-xl bg-blue-800 px-5 py-3 text-sm font-semibold text-white shadow-sm transition duration-200 hover:-translate-y-0.5 hover:bg-blue-900 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex min-w-48 items-center justify-center gap-2 rounded-xl bg-steel-700 px-5 py-3 text-sm font-semibold text-white shadow-sm transition duration-200 hover:-translate-y-0.5 hover:bg-steel-800 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={saving || Boolean(readingMedia)}
                   type="submit"
                 >

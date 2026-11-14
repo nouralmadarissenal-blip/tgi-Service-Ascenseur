@@ -1,10 +1,13 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ArrowUpDown,
   AlertCircle,
   Building,
+  CircleDollarSign,
   CheckCircle2,
   ChevronDown,
   FileDown,
+  Landmark,
   Mail,
   MapPin,
   Pencil,
@@ -126,9 +129,11 @@ function getClientBalance(client, documents) {
         const remaining = invoice.remainingAmount == null
           ? Number(invoice.totalTTC || 0) - Number(invoice.paidAmount || 0)
           : Number(invoice.remainingAmount)
-        return total + Math.max(0, remaining)
+        return total + (Number.isFinite(remaining) ? Math.max(0, remaining) : 0)
       }, 0)
-    : Number(client.currentBalance || 0)
+    : Number.isFinite(Number(client.currentBalance))
+      ? Math.max(0, Number(client.currentBalance))
+      : 0
 }
 
 function getClientForm(client) {
@@ -212,8 +217,8 @@ const elevatorStatusClass = {
 
 export default function Clients() {
   const { data: clients, loading, error: loadError } = useFirestoreCollection('clients')
-  const { data: sales, error: salesError } = useFirestoreCollection('sales')
-  const { data: legacySales, error: legacySalesError } = useFirestoreCollection('salesDocuments')
+  const { data: sales, loading: salesLoading, error: salesError } = useFirestoreCollection('sales')
+  const { data: legacySales, loading: legacySalesLoading, error: legacySalesError } = useFirestoreCollection('salesDocuments')
   const salesDocuments = useMemo(() => [...sales, ...legacySales], [sales, legacySales])
   const [query, setQuery] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
@@ -230,6 +235,7 @@ export default function Clients() {
   const [companySettings, setCompanySettings] = useState({})
   const [settingsError, setSettingsError] = useState('')
   const pdfRef = useRef(null)
+  const dataLoading = loading || salesLoading || legacySalesLoading
 
   useEffect(() => onSnapshot(
     doc(db, 'settings', 'company'),
@@ -282,6 +288,12 @@ export default function Clients() {
       .sort((first, second) => first.__clientName.localeCompare(second.__clientName, 'fr'))
   }, [clients, query, typeFilter, contractStatusFilter, salesDocuments])
   const table = useDataTable(filteredClients)
+  const summary = useMemo(() => ({
+    clientCount: clients.length,
+    elevatorCount: clients.reduce((total, client) => total + getElevatorCount(client), 0),
+    activeContracts: clients.filter((client) => client.contractStatus === 'Actif').length,
+    balance: clients.reduce((total, client) => total + getClientBalance(client, salesDocuments), 0),
+  }), [clients, salesDocuments])
   const exportColumns = [
     { label: 'Client', value: (client) => client.__clientName },
     { label: 'Type', key: 'clientType' },
@@ -330,43 +342,56 @@ export default function Clients() {
     const undetailedElevatorCount = Number(form.undetailedElevatorCount)
     const elevators = form.elevators.map((elevator) => ({
       ...elevator,
+      id: String(elevator.id || `elevator-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
       reference: String(elevator.reference || '').trim(),
       brand: String(elevator.brand || '').trim(),
       floors: Number(elevator.floors),
     }))
+    const elevatorReferences = elevators.map((elevator) => elevator.reference.toLocaleLowerCase('fr'))
+    const hasDuplicateElevatorReferences = new Set(elevatorReferences).size !== elevatorReferences.length
+    const email = String(form.email || '').trim()
+    const isEmailValid = !email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
     const invalidElevator = elevators.find(
       (elevator) =>
         !elevator.reference ||
         !elevator.brand ||
         !ELEVATOR_TYPES.includes(elevator.type) ||
-        !Number.isInteger(elevator.floors) ||
+        !Number.isSafeInteger(elevator.floors) ||
         elevator.floors < 1 ||
         !ELEVATOR_STATUSES.includes(elevator.status),
     )
 
-    if (
-      !String(form.name || '').trim() ||
-      !CLIENT_TYPES.includes(form.clientType) ||
+    let validationError = ''
+    let validationTab = 'contract'
+    if (!String(form.name || '').trim()) {
+      validationError = 'Le nom du client ou de la résidence est obligatoire.'
+      validationTab = 'identity'
+    } else if (!CLIENT_TYPES.includes(form.clientType)) {
+      validationError = 'Sélectionnez un type de client valide.'
+      validationTab = 'identity'
+    } else if (!isEmailValid) {
+      validationError = 'Saisissez une adresse e-mail valide ou laissez le champ vide.'
+      validationTab = 'identity'
+    } else if (invalidElevator) {
+      validationError = 'Chaque ascenseur doit avoir un repère, une marque, un type, un nombre de niveaux valide et un état.'
+      validationTab = 'elevators'
+    } else if (hasDuplicateElevatorReferences) {
+      validationError = 'Chaque ascenseur doit avoir un repère unique pour ce client.'
+      validationTab = 'elevators'
+    } else if (
+      form.currentBalance === '' ||
       !Number.isFinite(currentBalance) ||
       currentBalance < 0 ||
-      !Number.isInteger(undetailedElevatorCount) ||
-      undetailedElevatorCount < 0 ||
-      invalidElevator
+      !Number.isSafeInteger(Math.round(currentBalance * 100)) ||
+      !Number.isSafeInteger(undetailedElevatorCount) ||
+      undetailedElevatorCount < 0
     ) {
-      setActionError(
-        invalidElevator
-          ? 'Chaque ascenseur doit avoir un repère, une marque, un type, un nombre de niveaux valide et un état.'
-          : !String(form.name || '').trim()
-            ? 'Le nom du client ou de la résidence est obligatoire.'
-            : 'Vérifiez le type de client, le solde et le nombre d’équipements existants non détaillés.',
-      )
-      setActiveTab(
-        invalidElevator
-          ? 'elevators'
-          : !String(form.name || '').trim() || !CLIENT_TYPES.includes(form.clientType)
-            ? 'identity'
-            : 'contract',
-      )
+      validationError = 'Vérifiez le solde et le nombre d’équipements existants non détaillés.'
+    }
+
+    if (validationError) {
+      setActionError(validationError)
+      setActiveTab(validationTab)
       return
     }
 
@@ -513,6 +538,25 @@ export default function Clients() {
         </button>
       </div>
 
+      <section aria-label="Synthèse du portefeuille clients" className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          { label: 'Clients suivis', value: summary.clientCount, icon: Building, tone: 'bg-steel-50 text-steel-700' },
+          { label: 'Ascenseurs au parc', value: summary.elevatorCount, icon: ArrowUpDown, tone: 'bg-amber-50 text-amber-700' },
+          { label: 'Contrats actifs', value: summary.activeContracts, icon: Landmark, tone: 'bg-emerald-50 text-emerald-700' },
+          { label: 'Solde restant', value: formatClientCurrency(summary.balance, companySettings.defaultCurrency), icon: CircleDollarSign, tone: 'bg-orange-50 text-orange-700' },
+        ].map(({ label, value, icon: Icon, tone }) => (
+          <article className="rounded-2xl border border-white bg-white/85 p-4 shadow-sm ring-1 ring-slate-200/70 backdrop-blur transition hover:-translate-y-0.5 hover:shadow-md" key={label}>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-medium text-slate-500">{label}</p>
+              <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${tone}`}>
+                <Icon aria-hidden="true" size={18} />
+              </span>
+            </div>
+            <p className="mt-2 text-xl font-semibold tracking-tight text-slate-900">{value}</p>
+          </article>
+        ))}
+      </section>
+
       <section className="mt-8 overflow-hidden rounded-2xl border border-white bg-white/90 shadow-xl shadow-slate-900/[0.04] ring-1 ring-slate-200/70 backdrop-blur-xl">
         <div className="flex flex-col gap-4 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <div className="flex items-center gap-3">
@@ -522,7 +566,7 @@ export default function Clients() {
             <div>
               <p className="text-sm font-semibold text-slate-900">Tous les clients</p>
               <p className="text-xs text-slate-500">
-                {clients.length} fiche{clients.length === 1 ? '' : 's'}
+                {summary.clientCount} fiche{summary.clientCount === 1 ? '' : 's'}
               </p>
             </div>
           </div>
@@ -583,7 +627,7 @@ export default function Clients() {
           </p>
         )}
 
-        {loading ? (
+        {dataLoading ? (
           <TableSkeleton columns={7} minWidth={980} />
         ) : filteredClients.length === 0 ? (
           <EmptyState
@@ -663,11 +707,12 @@ export default function Clients() {
                               aria-controls={`client-details-${client.id}`}
                               aria-expanded={expanded}
                               aria-label={`${expanded ? 'Masquer' : 'Voir'} le parc de ${getClientName(client)}`}
-                              className={`rounded-lg p-2 transition ${expanded ? 'bg-blue-50 text-blue-700' : 'text-slate-500 hover:bg-blue-50 hover:text-blue-700'}`}
+                              className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition ${expanded ? 'bg-steel-50 text-steel-700' : 'text-slate-500 hover:bg-steel-50 hover:text-steel-700'}`}
                               onClick={() => setExpandedClientId(expanded ? null : client.id)}
-                              title={expanded ? 'Masquer les détails' : 'Voir les détails'}
+                              title={expanded ? 'Masquer le parc' : 'Voir le parc'}
                               type="button"
                             >
+                              <span className="hidden xl:inline">{expanded ? 'Masquer' : 'Voir le parc'}</span>
                               <ChevronDown className={`transition-transform ${expanded ? 'rotate-180' : ''}`} size={17} />
                             </button>
                             <button
@@ -796,7 +841,7 @@ export default function Clients() {
             </table>
           </div>
         )}
-        {!loading && filteredClients.length > 0 && <DataTablePagination {...table} />}
+        {!dataLoading && filteredClients.length > 0 && <DataTablePagination {...table} />}
       </section>
 
       {formOpen && (
@@ -829,6 +874,7 @@ export default function Clients() {
             <div aria-label="Sections du formulaire client" className="flex gap-1 overflow-x-auto border-b border-slate-100 px-4 pt-3 sm:px-7" role="tablist">
               {TABS.map((tab) => (
                 <button
+                  aria-controls={`client-panel-${tab.id}`}
                   aria-selected={activeTab === tab.id}
                   className={`whitespace-nowrap rounded-t-lg border-b-2 px-3 py-3 text-xs font-semibold transition sm:px-4 sm:text-sm ${
                     activeTab === tab.id
@@ -850,7 +896,12 @@ export default function Clients() {
               className="max-h-[calc(100vh-240px)] overflow-y-auto px-5 py-5 sm:px-7"
               onSubmit={saveClient}
             >
-              <section aria-labelledby={`client-tab-${activeTab}`} role="tabpanel">
+              <section
+                aria-labelledby={`client-tab-${activeTab}`}
+                id={`client-panel-${activeTab}`}
+                role="tabpanel"
+                tabIndex={0}
+              >
                 {activeTab === 'identity' && (
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Type de client *">
