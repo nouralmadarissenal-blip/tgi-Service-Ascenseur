@@ -447,7 +447,7 @@ export default function Settings() {
           </div>
           <div className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-100 bg-white px-3 py-2 text-xs font-medium text-slate-600 shadow-sm">
             <ShieldCheck aria-hidden="true" className="text-emerald-600" size={16} />
-            Accès SuperAdmin
+            Accès administrateur ERP
           </div>
         </header>
 
@@ -842,7 +842,7 @@ export default function Settings() {
           <footer className="flex flex-col gap-4 border-t border-slate-200 bg-slate-50/80 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-8">
             <p className="flex items-center gap-2 text-xs font-medium text-slate-500">
               <ShieldCheck aria-hidden="true" className="text-emerald-600" size={16} />
-              Configuration réservée au SuperAdmin
+              Configuration accessible aux rôles administratifs
             </p>
             <button
               className="inline-flex min-w-48 items-center justify-center gap-2 rounded-xl bg-steel-700 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-steel-800 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-steel-100 disabled:cursor-not-allowed disabled:opacity-60"

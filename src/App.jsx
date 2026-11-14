@@ -204,7 +204,7 @@ function AppRoutes() {
           />
           <Route
             element={
-              <ProtectedRoute allowedRoles={[]}>
+              <ProtectedRoute allowedRoles={['Directeur', 'Commercial']}>
                 <Settings />
               </ProtectedRoute>
             }
