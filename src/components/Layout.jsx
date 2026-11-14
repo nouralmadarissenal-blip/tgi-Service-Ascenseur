@@ -9,16 +9,20 @@ import {
   Menu,
   Settings,
   Users,
+  UserRound,
   WalletCards,
   Wrench,
   X,
 } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import UserAvatar from './common/UserAvatar'
 import Footer from './Footer'
+import { getProfileName } from '../utils/getAvatar'
 
 const navigation = [
   { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
+  { label: 'Mon profil', to: '/profile', icon: UserRound },
   { label: 'Clients', to: '/clients', icon: Users, allowedRoles: ['Commercial'] },
   { label: 'Techniciens', to: '/technicians', icon: Wrench, allowedRoles: ['Directeur'] },
   { label: 'Interventions', to: '/interventions', icon: ClipboardList, allowedRoles: ['Directeur'] },
@@ -31,6 +35,7 @@ const navigation = [
 
 export default function Layout() {
   const { user, role, logout } = useAuth()
+  const displayName = user?.name || getProfileName(user?.email) || user?.email || 'Utilisateur'
   const [mobileOpen, setMobileOpen] = useState(false)
   const [logoutError, setLogoutError] = useState('')
 
@@ -95,9 +100,12 @@ export default function Layout() {
       </nav>
 
       <div className="border-t border-white/10 p-4">
-        <div className="mb-3 min-w-0 px-1">
-          <p className="truncate text-xs font-medium text-white">{user?.name || user?.email}</p>
-          <p className="mt-1 truncate text-[11px] text-slate-500">{role} · {user?.email}</p>
+        <div className="mb-3 flex min-w-0 items-center gap-3 px-1">
+          <UserAvatar className="border-white/15" email={user?.email} name={displayName} size="sm" />
+          <div className="min-w-0">
+            <p className="truncate text-xs font-semibold text-white">{displayName}</p>
+            <p className="mt-1 truncate text-[11px] text-slate-400">{role} · {user?.email}</p>
+          </div>
         </div>
         {logoutError && <p className="mb-2 text-xs text-red-300" role="alert">{logoutError}</p>}
         <button
@@ -139,6 +147,13 @@ export default function Layout() {
             <Menu size={20} />
           </button>
           <img alt="TGI Ascenseurs · Manager Pro" className="h-10 w-auto object-contain transition-transform duration-200 hover:scale-105" src="/logo.jpeg" />
+          <div className="ml-auto flex min-w-0 items-center gap-2">
+            <UserAvatar email={user?.email} name={displayName} size="sm" />
+            <div className="hidden min-w-0 sm:block">
+              <p className="max-w-36 truncate text-xs font-semibold text-slate-800">{displayName}</p>
+              <p className="text-[11px] text-slate-500">{role}</p>
+            </div>
+          </div>
         </header>
         <div className="flex-1">
           <Outlet />

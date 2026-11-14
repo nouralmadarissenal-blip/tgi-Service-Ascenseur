@@ -14,6 +14,7 @@ const Contracts = lazy(() => import('./pages/Contracts'))
 const Stock = lazy(() => import('./pages/Stock'))
 const Sales = lazy(() => import('./pages/Sales'))
 const Recovery = lazy(() => import('./pages/Recovery'))
+const Profile = lazy(() => import('./pages/Profile'))
 
 const authenticatedRoles = ['Directeur', 'Commercial']
 
@@ -120,6 +121,7 @@ function AppRoutes() {
           }
         >
           <Route element={<Dashboard />} path="/dashboard" />
+          <Route element={<Profile />} path="/profile" />
           <Route
             element={
               <ProtectedRoute allowedRoles={['Commercial']}>

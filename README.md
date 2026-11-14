@@ -26,6 +26,12 @@ Authentication, Firestore et Storage y sont initialisés.
 Seuls les rôles ci-dessus sont reconnus. Les comptes inactifs ou sans rôle valide
 ne peuvent pas accéder aux pages protégées.
 
+Les photos de profil sont associées aux e-mails du Directeur et du Commercial
+dans `src/utils/getAvatar.js`. Les fichiers `public/Khalid Laassas.jpeg` et
+`public/Youness Laassas.jpeg` sont servis par l’application; les autres comptes
+affichent un avatar avec leurs initiales. La route `Mon profil` présente les
+informations du compte connecté.
+
 La protection des routes est côté client. Les règles de sécurité Firestore et
 Storage doivent également contrôler les accès aux données côté serveur.
 
