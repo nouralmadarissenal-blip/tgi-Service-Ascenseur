@@ -1,12 +1,16 @@
 export function getDefaultClauses(type, version) {
   const isInstallation = type === 'installation'
+  const isModernisation = type === 'modernisation' || type === 'modernization'
+  const serviceDescription = isInstallation
+    ? 'les travaux d’installation décrits dans les conditions particulières'
+    : isModernisation
+      ? 'les travaux de modernisation décrits dans les conditions particulières'
+      : 'les prestations d’intervention et de maintenance décrites dans les conditions particulières'
 
   if (version === 'simple') {
     return [
       `ARTICLE 1 — OBJET\nLe présent contrat définit les conditions selon lesquelles TGI Ascenseurs réalise ${
-        isInstallation
-          ? 'les travaux d’installation décrits dans les conditions particulières'
-          : 'les prestations d’intervention et de maintenance décrites dans les conditions particulières'
+        serviceDescription
       }. Toute prestation non expressément décrite fait l’objet d’un accord écrit distinct.`,
       `ARTICLE 2 — OBLIGATIONS DES PARTIES\nTGI Ascenseurs réalise les prestations convenues avec le soin professionnel attendu. Le Client fournit les accès, informations et conditions de sécurité nécessaires, et signale sans délai toute anomalie susceptible d’affecter l’équipement.`,
       `ARTICLE 3 — PRIX ET RÈGLEMENT\nLe prix, les taxes applicables, l’échéancier et les modalités de règlement sont ceux indiqués aux conditions particulières. Toute prestation supplémentaire doit faire l’objet d’un devis accepté avant sa réalisation.`,
@@ -18,12 +22,14 @@ export function getDefaultClauses(type, version) {
     `ARTICLE 1 — OBJET ET DOCUMENTS CONTRACTUELS\nLe présent contrat a pour objet ${
       isInstallation
         ? 'la fourniture et la réalisation des travaux d’installation de l’équipement décrits aux conditions particulières'
-        : 'l’exécution des prestations d’intervention et de maintenance de l’équipement décrites aux conditions particulières'
+        : isModernisation
+          ? 'la réalisation des travaux de modernisation de l’équipement décrits aux conditions particulières'
+          : 'l’exécution des prestations d’intervention et de maintenance de l’équipement décrites aux conditions particulières'
     }. Il est constitué du présent document, de ses conditions particulières et de tout avenant signé par les parties. En cas de contradiction, l’avenant le plus récent prévaut pour son objet.`,
     `ARTICLE 2 — PÉRIMÈTRE DES PRESTATIONS\nLes prestations couvertes, le site, l’équipement, le calendrier et les éventuelles exclusions sont définis aux conditions particulières. Toute modification du périmètre, demande supplémentaire ou intervention rendue nécessaire par un événement non prévu fera l’objet d’un devis ou d’un avenant accepté par le Client.`,
     `ARTICLE 3 — OBLIGATIONS DE TGI ASCENSEURS\nTGI Ascenseurs exécute les prestations convenues avec diligence et selon les règles professionnelles applicables. Elle informe le Client des difficultés susceptibles d’affecter le calendrier ou le périmètre. Les délais d’intervention mentionnés au contrat constituent des objectifs de prise en charge et ne valent pas garantie de remise en service lorsque celle-ci dépend d’un diagnostic, de pièces ou de conditions extérieures.`,
     `ARTICLE 4 — OBLIGATIONS DU CLIENT\nLe Client désigne un interlocuteur, garantit l’accès au site et à l’équipement aux dates convenues, transmet les informations utiles et maintient les locaux dans des conditions permettant une intervention en sécurité. Il s’abstient de faire intervenir un tiers sur l’équipement sans en informer TGI Ascenseurs et signale immédiatement tout incident ou risque identifié.`,
-    `ARTICLE 5 — CALENDRIER, ACCÈS ET RÉCEPTION\nLes dates prévisionnelles sont convenues entre les parties et peuvent être ajustées en cas d’indisponibilité du site, de retard d’approvisionnement, de travaux préalables manquants ou d’un événement extérieur. Pour une installation, la réception est constatée par un procès-verbal ou tout document équivalent signé par les parties, avec mention des réserves éventuelles et des modalités de leur levée.`,
+    `ARTICLE 5 — CALENDRIER, ACCÈS ET RÉCEPTION\nLes dates prévisionnelles sont convenues entre les parties et peuvent être ajustées en cas d’indisponibilité du site, de retard d’approvisionnement, de travaux préalables manquants ou d’un événement extérieur. Pour les travaux d’installation ou de modernisation, la réception est constatée par un procès-verbal ou tout document équivalent signé par les parties, avec mention des réserves éventuelles et des modalités de leur levée.`,
     `ARTICLE 6 — PRIX, FACTURATION ET PAIEMENT\nLes prix hors taxes, taxes, échéances et modalités de paiement sont précisés aux conditions particulières. Les travaux ou fournitures hors périmètre ne sont engagés qu’après acceptation écrite d’un devis. Toute contestation de facture doit être motivée par écrit, sans préjudice du règlement des sommes non contestées.`,
     `ARTICLE 7 — GARANTIE, ENTRETIEN ET EXCLUSIONS\nLa garantie éventuellement consentie et sa durée figurent aux conditions particulières. Elle ne couvre pas les dommages résultant d’une utilisation non conforme, d’une intervention non autorisée, d’un défaut d’entretien imputable au Client, d’une usure normale ou d’un événement extérieur. Pour les prestations de maintenance, les opérations et périodicités couvertes sont celles expressément prévues au périmètre.`,
     `ARTICLE 8 — RESPONSABILITÉ ET SÉCURITÉ\nChaque partie répond des dommages directs résultant de ses manquements établis, dans les limites prévues par les dispositions impératives applicables. Aucune stipulation ne limite une responsabilité qui ne peut légalement l’être. Le Client conserve la responsabilité de l’accès au site et des mesures de sécurité relevant de son exploitation, et applique les recommandations écrites communiquées par TGI Ascenseurs.`,

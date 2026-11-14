@@ -1,5 +1,6 @@
 import { forwardRef } from 'react'
 import PdfCompanyHeader from './PdfCompanyHeader'
+import { calculateContractAmounts } from '../../utils/contractFinancials'
 
 function formatCurrency(value, currency = 'MAD') {
   if (value === null || value === undefined || value === '') return 'À définir'
@@ -19,26 +20,20 @@ function formatDate(value) {
 }
 
 const ContractPdf = forwardRef(function ContractPdf({ client, company, contract }, ref) {
-  const contractType =
-    contract.type === 'installation'
-      ? 'CONTRAT D’INSTALLATION'
+  const contractType = contract.type === 'installation'
+    ? 'CONTRAT D’INSTALLATION'
+    : ['modernisation', 'modernization'].includes(contract.type)
+      ? 'CONTRAT DE MODERNISATION'
       : 'CONTRAT DE MAINTENANCE'
   const version = contract.version === 'complete' ? 'VERSION COMPLÈTE' : 'VERSION SIMPLE'
   const rawTaxRate = Number(contract.taxRate)
   const taxRate = Number.isFinite(rawTaxRate) && rawTaxRate >= 0 && rawTaxRate <= 100
     ? rawTaxRate
     : 0
-  const rawPriceHT =
-    contract.priceHT === null || contract.priceHT === undefined || contract.priceHT === ''
-      ? null
-      : Number(contract.priceHT)
-  const priceHT = rawPriceHT === null || !Number.isFinite(rawPriceHT)
-    ? null
-    : Math.round((rawPriceHT + Number.EPSILON) * 100) / 100
-  const taxAmount = priceHT === null
-    ? null
-    : Math.round((priceHT * taxRate / 100 + Number.EPSILON) * 100) / 100
-  const priceTTC = priceHT === null ? null : priceHT + taxAmount
+  const amounts = calculateContractAmounts(contract.priceHT, taxRate)
+  const priceHT = amounts.valid ? amounts.totalHT : null
+  const taxAmount = amounts.valid ? amounts.taxAmount : null
+  const priceTTC = amounts.valid ? amounts.totalTTC : null
   const clauses = String(contract.clauses || '')
     .split(/\n\s*\n|(?=^ARTICLE\s+\d+\s*[—-])/gim)
     .map((clause) => clause.trim())
