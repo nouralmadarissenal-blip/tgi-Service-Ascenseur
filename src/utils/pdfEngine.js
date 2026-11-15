@@ -17,35 +17,113 @@ const pdfOptions = {
   },
 }
 
+function validColor(value, fallback) {
+  return /^#[0-9A-Fa-f]{6}$/.test(value || '') ? value : fallback
+}
+
+function hexToRgb(hex) {
+  return [
+    Number.parseInt(hex.slice(1, 3), 16),
+    Number.parseInt(hex.slice(3, 5), 16),
+    Number.parseInt(hex.slice(5, 7), 16),
+  ]
+}
+
+function getFontFamily(font) {
+  if (font === 'Times New Roman') return '"Times New Roman", Times, serif'
+  if (font === 'Arial') return 'Arial, Helvetica, sans-serif'
+  if (font === 'Roboto') return 'Roboto, Arial, sans-serif'
+  return 'Helvetica, Arial, sans-serif'
+}
+
+function applyPdfAppearance(root, company) {
+  const primaryColor = validColor(company.pdfPrimaryColor, '#4682B4')
+  const secondaryColor = validColor(company.pdfSecondaryColor, '#1e3a8a')
+  const fontFamily = getFontFamily(company.pdfFont)
+  root.style.fontFamily = fontFamily
+
+  root.querySelectorAll('*').forEach((element) => {
+    element.style.fontFamily = fontFamily
+    if (
+      element.style.border ||
+      element.style.borderTop ||
+      element.style.borderRight ||
+      element.style.borderBottom ||
+      element.style.borderLeft
+    ) {
+      element.style.borderColor = secondaryColor
+    }
+  })
+
+  root.querySelectorAll('h1, h2, h3, [data-pdf-primary]').forEach((element) => {
+    element.style.color = primaryColor
+  })
+  root.querySelectorAll('table thead th').forEach((element) => {
+    element.style.backgroundColor = primaryColor
+    element.style.borderColor = secondaryColor
+    element.style.color = '#ffffff'
+  })
+  root.querySelectorAll('table tbody th').forEach((element) => {
+    element.style.borderColor = secondaryColor
+    element.style.color = secondaryColor
+  })
+}
+
 function createCompanyHeader(company = {}) {
+  const primaryColor = validColor(company.pdfPrimaryColor, '#4682B4')
+  const secondaryColor = validColor(company.pdfSecondaryColor, '#1e3a8a')
+  const layout = ['classic', 'modern', 'minimal'].includes(company.pdfLayout)
+    ? company.pdfLayout
+    : 'classic'
+  const modern = layout === 'modern'
+  const minimal = layout === 'minimal'
+  const fontFamily = getFontFamily(company.pdfFont)
   const header = document.createElement('header')
   header.dataset.pdfCompanyHeader = 'true'
-  header.style.cssText =
-    'box-sizing:border-box;width:190mm;display:flex;justify-content:space-between;align-items:flex-start;gap:8mm;padding:0 0 6mm;border-bottom:2px solid #1e3a8a;font:8pt Arial,sans-serif;color:#475569;'
+  header.style.cssText = [
+    'box-sizing:border-box',
+    'width:190mm',
+    'display:flex',
+    `flex-direction:${modern ? 'column' : 'row'}`,
+    `justify-content:${modern || minimal ? 'center' : 'space-between'}`,
+    `align-items:${modern || minimal ? 'center' : 'flex-start'}`,
+    'gap:8mm',
+    `padding:${modern ? '6mm 5mm' : minimal ? '0 0 3mm' : '0 0 6mm'}`,
+    `border-bottom:${minimal ? '1px' : '2px'} solid ${secondaryColor}`,
+    `background:${modern ? primaryColor : 'transparent'}`,
+    `font:8pt ${fontFamily}`,
+    `color:${modern ? '#ffffff' : '#475569'}`,
+  ].join(';')
 
   const logoBox = document.createElement('div')
-  logoBox.style.cssText = 'width:55mm;min-height:22mm;display:flex;align-items:center;'
+  logoBox.style.cssText = [
+    `width:${modern ? '100%' : minimal ? '40mm' : '55mm'}`,
+    `min-height:${modern ? '17mm' : '22mm'}`,
+    'display:flex',
+    'align-items:center',
+    `justify-content:${modern || minimal ? 'center' : 'flex-start'}`,
+  ].join(';')
   const companyLogo = company.logoBase64 || company.logoUrl
   if (companyLogo) {
     const logo = document.createElement('img')
     logo.alt = `Logo ${company.companyName || 'TGI Ascenseurs'}`
     logo.crossOrigin = 'anonymous'
-    logo.style.cssText = 'max-width:52mm;max-height:22mm;object-fit:contain;'
+    logo.style.cssText = `max-width:${modern ? '54mm' : minimal ? '38mm' : '52mm'};max-height:${modern ? '18mm' : minimal ? '15mm' : '22mm'};object-fit:contain;`
     logo.src = companyLogo
     logoBox.appendChild(logo)
   } else {
     const brand = document.createElement('strong')
     brand.textContent = company.companyName || 'TGI Ascenseurs'
-    brand.style.cssText = 'font-size:16pt;color:#1e3a8a;'
+    brand.style.cssText = `font-size:${minimal ? '12pt' : '16pt'};color:${modern ? '#ffffff' : primaryColor};`
     logoBox.appendChild(brand)
   }
   header.appendChild(logoBox)
 
   const details = document.createElement('div')
-  details.style.cssText = 'max-width:100mm;text-align:right;font-size:7.5pt;line-height:1.4;'
+  details.style.cssText = `max-width:${modern ? '160mm' : '100mm'};text-align:${modern || minimal ? 'center' : 'right'};font-size:${minimal ? '7pt' : '7.5pt'};line-height:1.4;`
   const companyName = document.createElement('strong')
   companyName.textContent = company.companyName || 'TGI Ascenseurs'
-  companyName.style.cssText = 'display:block;margin-bottom:1mm;font-size:10pt;color:#0f172a;'
+  companyName.style.cssText = `display:block;margin-bottom:1mm;font-size:10pt;color:${modern ? '#ffffff' : primaryColor};`
   details.appendChild(companyName)
   ;[
     ['Raison sociale', company.legalName],
@@ -111,6 +189,7 @@ export default async function generatePdf(element, filename = 'document.pdf', co
   if (!printable.querySelector('[data-pdf-company-header]')) {
     printable.prepend(createCompanyHeader(company))
   }
+  applyPdfAppearance(printable, company)
   const stampSlot = printable.querySelector('[data-pdf-stamp-slot="true"]')
   if (company.autoStampEnabled === true && company.stampBase64 && stampSlot) {
     const stamp = document.createElement('img')
@@ -148,18 +227,31 @@ export default async function generatePdf(element, filename = 'document.pdf', co
     const pageCount = pdf.internal.getNumberOfPages()
     const pageWidth = pdf.internal.pageSize.getWidth()
     const pageHeight = pdf.internal.pageSize.getHeight()
+    const watermark = String(company.pdfWatermark || '').trim().slice(0, 80)
+    const secondaryRgb = hexToRgb(validColor(company.pdfSecondaryColor, '#1e3a8a'))
+    const footerFont = company.pdfFont === 'Times New Roman' ? 'times' : 'helvetica'
     const footerLines = footerText
       ? pdf.splitTextToSize(footerText, pageWidth - 28)
       : []
 
     for (let page = 1; page <= pageCount; page += 1) {
       pdf.setPage(page)
-      pdf.setDrawColor(226, 232, 240)
+      if (watermark) {
+        pdf.setFont('helvetica', 'bold')
+        pdf.setFontSize(42)
+        pdf.setTextColor(244, 246, 248)
+        pdf.text(watermark, pageWidth / 2, pageHeight / 2, {
+          align: 'center',
+          angle: -32,
+          maxWidth: pageWidth - 30,
+        })
+      }
+      pdf.setDrawColor(...secondaryRgb)
       pdf.setLineWidth(0.25)
       pdf.line(10, pageHeight - footerMargin + 2, pageWidth - 10, pageHeight - footerMargin + 2)
-      pdf.setFont('helvetica', 'normal')
+      pdf.setFont(footerFont, 'normal')
       pdf.setFontSize(7)
-      pdf.setTextColor(100, 116, 139)
+      pdf.setTextColor(...secondaryRgb)
       if (footerLines.length) {
         pdf.text(footerLines, pageWidth / 2, pageHeight - footerMargin + 6, {
           align: 'center',

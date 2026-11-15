@@ -37,7 +37,6 @@ const DOCUMENT_OPTIONS = [
   { value: 'quote', label: 'Devis', prefix: 'DEV', prefixField: 'quotePrefix' },
   { value: 'purchaseOrder', label: 'Bon de commande', prefix: 'BC', prefixField: 'purchaseOrderPrefix' },
   { value: 'deliveryNote', label: 'Bon de livraison', prefix: 'BL', prefixField: 'deliveryNotePrefix' },
-  { value: 'invoice', label: 'Facture', prefix: 'FAC', prefixField: 'invoicePrefix' },
 ]
 const SUPPORTED_CURRENCIES = ['MAD', 'EUR', 'USD']
 const VAT_OPTIONS = [20, 14, 0]
@@ -69,6 +68,13 @@ function dateInputValue(value, fallback = '') {
     return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
   }
   return /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : fallback
+}
+
+function formatDate(value) {
+  const dateValue = dateInputValue(value)
+  if (!dateValue) return '—'
+  const date = new Date(`${dateValue}T00:00:00`)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString('fr-FR')
 }
 
 function isValidDate(value) {
@@ -430,7 +436,7 @@ export default function Sales() {
 
   const linePreviews = useMemo(
     () => getLinePreviews(form.items, stockById, form.type, company),
-    [form.items, form.type, stockById, company.defaultVatRate],
+    [form.items, form.type, stockById, company],
   )
   const calculatedTotals = useMemo(
     () => calculateTotals(linePreviews),
@@ -444,7 +450,8 @@ export default function Sales() {
       ...item,
       __clientName: item.clientName || getClientName(clientById.get(item.clientId)),
       __documentStatus: getDocumentStatus(item),
-      __typeLabel: DOCUMENT_OPTIONS.find((option) => option.value === item.type)?.label || item.type,
+      __typeLabel: DOCUMENT_OPTIONS.find((option) => option.value === item.type)?.label ||
+        (item.type === 'invoice' ? 'Facture historique' : item.type),
       __totalTTC: getStoredTotal(item),
       __dateSort: dateInputValue(item.issueDate),
     })),
@@ -480,24 +487,9 @@ export default function Sales() {
     dateInputValue(editingDocument.issueDate).slice(0, 4) !== documentYear
 
   useEffect(() => {
-    if (!formOpen || !isValidDate(form.issueDate)) {
-      setNumberPreview('')
-      setNumberPreviewError('')
-      setNumberPreviewLoading(false)
-      return undefined
-    }
-
-    if (editingDocument && !needsNewNumber) {
-      setNumberPreview(editingDocument.number || '')
-      setNumberPreviewError('')
-      setNumberPreviewLoading(false)
-      return undefined
-    }
+    if (!formOpen || !isValidDate(form.issueDate) || (editingDocument && !needsNewNumber)) return undefined
 
     let active = true
-    setNumberPreview('')
-    setNumberPreviewError('')
-    setNumberPreviewLoading(true)
     const counterRef = doc(db, 'salesCounters', `${form.type}-${documentYear}`)
     getDoc(counterRef)
       .then((snapshot) => {
@@ -598,6 +590,9 @@ export default function Sales() {
 
   const handleSetField = (name, value) => {
     if (name === 'type') {
+      setNumberPreview('')
+      setNumberPreviewError('')
+      setNumberPreviewLoading(isValidDate(form.issueDate))
       setForm((current) => ({
         ...current,
         type: value,
@@ -613,6 +608,12 @@ export default function Sales() {
       return
     }
     if (name === 'issueDate') {
+      const canReuseNumber = editingDocument?.number &&
+        editingDocument.type === form.type &&
+        dateInputValue(editingDocument.issueDate).slice(0, 4) === String(value || '').slice(0, 4)
+      setNumberPreview(canReuseNumber ? editingDocument.number : '')
+      setNumberPreviewError('')
+      setNumberPreviewLoading(isValidDate(value) && !canReuseNumber)
       setForm((current) => ({
         ...current,
         issueDate: value,
@@ -628,6 +629,9 @@ export default function Sales() {
   const openNew = () => {
     setEditingDocument(null)
     setForm(createEmptyForm(company))
+    setNumberPreview('')
+    setNumberPreviewError('')
+    setNumberPreviewLoading(true)
     setError('')
     setNotice('')
     setFormOpen(true)
@@ -656,6 +660,10 @@ export default function Sales() {
   })
 
   const openEdit = (documentData) => {
+    if (documentData.type === 'invoice') {
+      setError('Les factures sont désormais gérées dans le module Factures, où leur validation et leur verrouillage sont suivis.')
+      return
+    }
     if (documentData.sourceCollection !== 'sales') {
       setError('Ce document historique est consultable et exportable, mais ne peut pas être modifié. Dupliquez-le pour créer une nouvelle version.')
       return
@@ -670,12 +678,19 @@ export default function Sales() {
     }
     setEditingDocument(documentData)
     setForm(mapDocumentToForm(documentData))
+    setNumberPreview(documentData.number || '')
+    setNumberPreviewError('')
+    setNumberPreviewLoading(false)
     setError('')
     setNotice('')
     setFormOpen(true)
   }
 
   const duplicateDocument = (documentData) => {
+    if (documentData.type === 'invoice') {
+      setError('Une facture historique ne peut pas être dupliquée depuis Ventes. Créez une nouvelle facture dans le module Factures.')
+      return
+    }
     const duplicate = mapDocumentToForm(documentData)
     const issueDate = localDate()
     setEditingDocument(null)
@@ -686,6 +701,9 @@ export default function Sales() {
         ? addMonthsToDate(issueDate, Number(company.defaultQuoteValidityMonths) || 3)
         : addMonthsToDate(issueDate, 1),
     })
+    setNumberPreview('')
+    setNumberPreviewError('')
+    setNumberPreviewLoading(true)
     setError('')
     setNotice(`Brouillon préparé à partir de ${documentData.number || 'ce document'} ; un nouveau numéro sera attribué.`)
     setFormOpen(true)
@@ -1032,7 +1050,7 @@ export default function Sales() {
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-700">Gestion commerciale</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Ventes & documents</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-            Préparez devis, commandes, livraisons et factures avec calculs HT, TVA et TTC au centime.
+            Préparez devis, commandes et livraisons avec calculs HT, TVA et TTC au centime.
           </p>
         </div>
         <button
@@ -1142,7 +1160,7 @@ export default function Sales() {
             description={hasFilters
               ? 'Aucun document ne correspond aux filtres actifs.'
               : clients.length > 0 && stock.length > 0
-                ? 'Créez un devis, un bon de commande, une livraison ou une facture à partir du stock.'
+                ? 'Créez un devis, un bon de commande ou une livraison à partir du stock.'
                 : 'Ajoutez au moins un client et un article en stock avant de créer un document.'}
             icon={FileText}
             onAction={() => {
@@ -1217,10 +1235,12 @@ export default function Sales() {
                           <button
                             aria-label={`Modifier ${documentData.number || 'le document'}`}
                             className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
-                            disabled={!editable}
+                            disabled={!editable || documentData.type === 'invoice'}
                             onClick={() => openEdit(documentData)}
                             title={!editable
-                              ? documentData.sourceCollection !== 'sales'
+                              ? documentData.type === 'invoice'
+                                ? 'Les factures se gèrent dans le module Factures'
+                                : documentData.sourceCollection !== 'sales'
                                 ? 'Document historique : dupliquez-le pour créer une nouvelle version'
                                 : isDeliveryValidated(documentData)
                                   ? 'Une livraison validée ne peut pas être modifiée'
@@ -1232,7 +1252,8 @@ export default function Sales() {
                           </button>
                           <button
                             aria-label={`Dupliquer ${documentData.number || 'le document'}`}
-                            className="rounded-lg p-2 text-slate-500 transition hover:bg-steel-50 hover:text-steel-800"
+                            className="rounded-lg p-2 text-slate-500 transition hover:bg-steel-50 hover:text-steel-800 disabled:cursor-not-allowed disabled:opacity-40"
+                            disabled={documentData.type === 'invoice'}
                             onClick={() => duplicateDocument(documentData)}
                             title="Dupliquer"
                             type="button"

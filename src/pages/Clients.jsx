@@ -1,13 +1,12 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUpDown,
-  AlertCircle,
   Building,
-  CircleDollarSign,
   CheckCircle2,
   ChevronDown,
+  CircleDollarSign,
   FileDown,
-  Landmark,
+  LoaderCircle,
   Mail,
   MapPin,
   Pencil,
@@ -15,6 +14,7 @@ import {
   Plus,
   Search,
   Trash2,
+  Users,
   X,
 } from 'lucide-react'
 import {
@@ -22,75 +22,32 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDoc,
   onSnapshot,
   serverTimestamp,
   updateDoc,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
-import EmptyState from '../components/common/EmptyState'
-import DataTableExportToolbar from '../components/common/DataTableExportToolbar'
+import ClientForm from '../components/clients/ClientForm'
 import ClientPdf from '../components/pdf/ClientPdf'
+import DataTableExportToolbar from '../components/common/DataTableExportToolbar'
 import DataTablePagination from '../components/common/DataTablePagination'
+import EmptyState from '../components/common/EmptyState'
 import SortableTableHeader from '../components/common/SortableTableHeader'
 import TableSkeleton from '../components/common/TableSkeleton'
 import useDataTable from '../hooks/useDataTable'
 import useFirestoreCollection from '../hooks/useFirestoreCollection'
 
-const CLIENT_TYPES = ['Syndic', 'Promoteur Immobilier', 'Entreprise', 'Particulier']
-const CONTRACT_TYPES = ['Garantie', 'Maintenance', 'Aucun']
-const CONTRACT_STATUSES = ['Actif', 'Suspendu', 'Aucun']
-const ELEVATOR_TYPES = ['Électrique', 'Hydraulique']
-const ELEVATOR_STATUSES = ['En service', 'À l’arrêt', 'En travaux']
-const TABS = [
-  { id: 'identity', label: 'Identité & contact' },
-  { id: 'location', label: 'Localisation' },
-  { id: 'elevators', label: 'Parc d’ascenseurs' },
-  { id: 'contract', label: 'Contrat & finance' },
-]
-const fieldClass =
-  'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100'
-
-function createEmptyElevator() {
-  return {
-    id: `elevator-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    reference: '',
-    brand: '',
-    type: 'Électrique',
-    floors: '',
-    status: 'En service',
-  }
-}
-
-function createEmptyClient() {
-  return {
-    name: '',
-    clientType: 'Entreprise',
-    contactName: '',
-    phone: '',
-    phone2: '',
-    email: '',
-    address: '',
-    city: '',
-    postalCode: '',
-    ice: '',
-    rc: '',
-    if: '',
-    patente: '',
-    elevators: [],
-    undetailedElevatorCount: 0,
-    elevatorCount: 0,
-    elevatorBrands: '',
-    contractType: 'Aucun',
-    contractStatus: 'Aucun',
-    contractEndDate: '',
-    currentBalance: '0',
-    notes: '',
-  }
-}
+const CLIENT_TYPES = ['Syndic', 'Entreprise', 'Particulier']
+const inputClass =
+  'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition focus:border-steel-500 focus:ring-4 focus:ring-steel-100'
 
 function getClientName(client) {
   return client.name || client.companyName || client.clientName || 'Client sans nom'
+}
+
+function normalizeClientType(type) {
+  if (type === 'Promoteur Immobilier') return 'Entreprise'
+  return CLIENT_TYPES.includes(type) ? type : 'Entreprise'
 }
 
 function getLegacyElevatorCount(client) {
@@ -100,142 +57,110 @@ function getLegacyElevatorCount(client) {
   ) {
     return Math.max(0, Number(client.undetailedElevatorCount))
   }
-  const elevatorCount = Math.max(0, Number(client.elevatorCount) || 0)
-  const detailedCount = Array.isArray(client.elevators) ? client.elevators.length : 0
-  return Math.max(0, elevatorCount - detailedCount)
+  const total = Math.max(0, Number(client.elevatorCount) || 0)
+  const detailed = Array.isArray(client.elevators) ? client.elevators.length : 0
+  return Math.max(0, total - detailed)
 }
 
 function getElevatorCount(client) {
-  const detailedCount = Array.isArray(client.elevators) ? client.elevators.length : 0
-  return detailedCount + getLegacyElevatorCount(client)
+  const detailed = Array.isArray(client.elevators) ? client.elevators.length : 0
+  return detailed + getLegacyElevatorCount(client)
 }
 
-function formatClientCurrency(value, currency = 'MAD') {
-  const amount = Number(value)
-  if (!Number.isFinite(amount)) return '—'
-  return new Intl.NumberFormat('fr-MA', {
-    style: 'currency',
-    currency: ['MAD', 'EUR', 'USD'].includes(currency) ? currency : 'MAD',
-    maximumFractionDigits: 2,
-  }).format(amount)
+function getRemainingAmount(invoice) {
+  const remaining = invoice.remainingAmount == null
+    ? Number(invoice.totalTTC || 0) - Number(invoice.paidAmount || 0)
+    : Number(invoice.remainingAmount)
+  return Number.isFinite(remaining) ? Math.max(0, remaining) : 0
 }
 
 function getClientBalance(client, documents) {
   const invoices = documents.filter(
-    (invoice) => invoice.type === 'invoice' && invoice.clientId === client.id,
+    (documentData) => documentData.type === 'invoice' && documentData.clientId === client.id,
   )
-  return invoices.length
-    ? invoices.reduce((total, invoice) => {
-        const remaining = invoice.remainingAmount == null
-          ? Number(invoice.totalTTC || 0) - Number(invoice.paidAmount || 0)
-          : Number(invoice.remainingAmount)
-        return total + (Number.isFinite(remaining) ? Math.max(0, remaining) : 0)
-      }, 0)
-    : Number.isFinite(Number(client.currentBalance))
-      ? Math.max(0, Number(client.currentBalance))
-      : 0
-}
-
-function getClientForm(client) {
-  const form = createEmptyClient()
-  const hasElevators = Array.isArray(client.elevators)
-  const elevators = hasElevators
-    ? client.elevators.map((elevator, index) => ({
-        ...createEmptyElevator(),
-        ...elevator,
-        id: elevator.id || `elevator-${client.id}-${index}`,
-        reference: elevator.reference || '',
-        brand: elevator.brand || '',
-        type: elevator.type || 'Électrique',
-        floors: elevator.floors == null ? '' : String(elevator.floors),
-        status: elevator.status || 'En service',
-      }))
-    : []
-  const elevatorCount = Math.max(0, Number(client.elevatorCount) || 0)
-  const undetailedElevatorCount = hasElevators
-    ? Math.max(
-        getLegacyElevatorCount(client),
-        elevatorCount - elevators.length,
-      )
-    : elevatorCount
-
-  return {
-    ...form,
-    ...Object.fromEntries(
-      Object.keys(form).map((field) => [field, client[field] ?? form[field]]),
-    ),
-    name: getClientName(client) === 'Client sans nom' ? '' : getClientName(client),
-    clientType: CLIENT_TYPES.includes(client.clientType) ? client.clientType : 'Entreprise',
-    phone: client.phone || client.phone1 || '',
-    elevators,
-    undetailedElevatorCount,
-    elevatorCount: elevators.length + undetailedElevatorCount,
-    currentBalance: String(client.currentBalance ?? 0),
-    contractType: CONTRACT_TYPES.includes(client.contractType) ? client.contractType : 'Aucun',
-    contractStatus: CONTRACT_STATUSES.includes(client.contractStatus) ? client.contractStatus : 'Aucun',
-    contractEndDate: client.contractEndDate || '',
+  if (invoices.length) {
+    return invoices.reduce((total, invoice) => total + getRemainingAmount(invoice), 0)
   }
+  const balance = Number(client.currentBalance)
+  return Number.isFinite(balance) ? Math.max(0, balance) : 0
 }
 
-function Field({ label, children, wide = false }) {
-  return (
-    <label className={wide ? 'sm:col-span-2' : ''}>
-      <span className="mb-1.5 block text-xs font-semibold text-slate-700">{label}</span>
-      {children}
-    </label>
-  )
+function formatCurrency(value, currency = 'MAD') {
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) return '—'
+  const supportedCurrency = ['MAD', 'EUR', 'USD'].includes(currency) ? currency : 'MAD'
+  return new Intl.NumberFormat('fr-MA', {
+    style: 'currency',
+    currency: supportedCurrency,
+    maximumFractionDigits: 2,
+  }).format(amount)
 }
 
-function TextInput({ value, onChange, type = 'text', required = false, ...props }) {
-  return (
-    <input
-      className={fieldClass}
-      onChange={onChange}
-      required={required}
-      type={type}
-      value={value}
-      {...props}
-    />
-  )
-}
-
-function SelectInput({ value, onChange, options, ...props }) {
-  return (
-    <select className={fieldClass} onChange={onChange} value={value} {...props}>
-      {options.map((option) => (
-        <option key={option} value={option}>{option}</option>
-      ))}
-    </select>
-  )
+function safeFilename(value) {
+  return String(value || 'client')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .toLowerCase() || 'client'
 }
 
 const elevatorStatusClass = {
+  'En marche': 'bg-emerald-50 text-emerald-700',
   'En service': 'bg-emerald-50 text-emerald-700',
+  'En panne': 'bg-red-50 text-red-700',
+  Panne: 'bg-red-50 text-red-700',
   'À l’arrêt': 'bg-amber-50 text-amber-700',
-  'En travaux': 'bg-blue-50 text-blue-700',
+  "À l'arrêt": 'bg-amber-50 text-amber-700',
+  'En travaux': 'bg-orange-50 text-orange-800',
+}
+
+function Toast({ notice, onDismiss }) {
+  if (!notice) return null
+  return (
+    <div
+      className="fixed right-4 top-24 z-[70] flex max-w-sm items-start gap-3 rounded-xl border border-emerald-200 bg-white px-4 py-3 shadow-xl shadow-slate-900/10 animate-slide-up"
+      role="status"
+    >
+      <CheckCircle2 aria-hidden="true" className="mt-0.5 shrink-0 text-emerald-600" size={18} />
+      <p className="flex-1 text-sm font-medium text-slate-800">{notice}</p>
+      <button
+        aria-label="Fermer la notification"
+        className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+        onClick={onDismiss}
+        type="button"
+      >
+        <X aria-hidden="true" size={15} />
+      </button>
+    </div>
+  )
 }
 
 export default function Clients() {
-  const { data: clients, loading, error: loadError } = useFirestoreCollection('clients')
-  const { data: sales, loading: salesLoading, error: salesError } = useFirestoreCollection('sales')
-  const { data: legacySales, loading: legacySalesLoading, error: legacySalesError } = useFirestoreCollection('salesDocuments')
+  const { data: clients, loading: clientsLoading, error: clientsError } =
+    useFirestoreCollection('clients')
+  const { data: sales, loading: salesLoading, error: salesError } =
+    useFirestoreCollection('sales')
+  const { data: legacySales, loading: legacySalesLoading, error: legacySalesError } =
+    useFirestoreCollection('salesDocuments')
   const salesDocuments = useMemo(() => [...sales, ...legacySales], [sales, legacySales])
-  const [query, setQuery] = useState('')
-  const [typeFilter, setTypeFilter] = useState('')
-  const [contractStatusFilter, setContractStatusFilter] = useState('')
-  const [formOpen, setFormOpen] = useState(false)
-  const [editingId, setEditingId] = useState(null)
-  const [activeTab, setActiveTab] = useState('identity')
-  const [form, setForm] = useState(createEmptyClient)
-  const [saving, setSaving] = useState(false)
-  const [exportingId, setExportingId] = useState(null)
-  const [expandedClientId, setExpandedClientId] = useState(null)
-  const [pdfRequest, setPdfRequest] = useState(null)
-  const [actionError, setActionError] = useState('')
+  const dataLoading = clientsLoading || salesLoading || legacySalesLoading
   const [companySettings, setCompanySettings] = useState({})
   const [settingsError, setSettingsError] = useState('')
+  const [query, setQuery] = useState('')
+  const [typeFilter, setTypeFilter] = useState('')
+  const [formOpen, setFormOpen] = useState(false)
+  const [formClient, setFormClient] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [clientToDelete, setClientToDelete] = useState(null)
+  const [deletingId, setDeletingId] = useState('')
+  const [deleteError, setDeleteError] = useState('')
+  const [expandedClientId, setExpandedClientId] = useState('')
+  const [exportingId, setExportingId] = useState('')
+  const [pdfRequest, setPdfRequest] = useState(null)
+  const [actionError, setActionError] = useState('')
+  const [notice, setNotice] = useState('')
   const pdfRef = useRef(null)
-  const dataLoading = loading || salesLoading || legacySalesLoading
 
   useEffect(() => onSnapshot(
     doc(db, 'settings', 'company'),
@@ -246,182 +171,139 @@ export default function Clients() {
     (snapshotError) => setSettingsError(snapshotError.message),
   ), [])
 
+  useEffect(() => {
+    if (!notice) return undefined
+    const timeout = window.setTimeout(() => setNotice(''), 4000)
+    return () => window.clearTimeout(timeout)
+  }, [notice])
+
   const filteredClients = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase()
+    const normalizedQuery = query.trim().toLocaleLowerCase('fr')
     return clients
-      .filter((client) =>
-        [
-          getClientName(client),
-          client.contactName,
-          client.email,
-          client.phone,
-          client.phone1,
-          client.phone2,
-          client.ice,
-          client.clientType,
-          client.contractType,
-          client.contractStatus,
-          client.city,
-          ...(Array.isArray(client.elevators)
-            ? client.elevators.flatMap((elevator) => [
-                elevator.reference,
-                elevator.brand,
-                elevator.type,
-              ])
-            : []),
-        ]
-          .filter(Boolean)
-          .some((value) => String(value).toLowerCase().includes(normalizedQuery)),
-      )
-      .filter((client) => !typeFilter || client.clientType === typeFilter)
-      .filter(
-        (client) =>
-          !contractStatusFilter ||
-          (client.contractStatus || 'Aucun') === contractStatusFilter,
-      )
       .map((client) => ({
         ...client,
         __clientName: getClientName(client),
+        __clientType: normalizeClientType(client.clientType),
+        __phone: client.phone || client.phone1 || client.phone2 || '',
         __elevatorCount: getElevatorCount(client),
         __balance: getClientBalance(client, salesDocuments),
       }))
-      .sort((first, second) => first.__clientName.localeCompare(second.__clientName, 'fr'))
-  }, [clients, query, typeFilter, contractStatusFilter, salesDocuments])
+      .filter((client) => !typeFilter || client.__clientType === typeFilter)
+      .filter((client) => {
+        if (!normalizedQuery) return true
+        const elevatorValues = Array.isArray(client.elevators)
+          ? client.elevators.flatMap((elevator) => [
+              elevator.reference,
+              elevator.brand,
+              elevator.type,
+              elevator.status,
+            ])
+          : []
+        return [
+          client.__clientName,
+          client.__clientType,
+          client.contactName,
+          client.__phone,
+          client.whatsapp,
+          client.email,
+          client.address,
+          client.city,
+          client.postalCode,
+          client.ice,
+          ...elevatorValues,
+        ]
+          .filter(Boolean)
+          .some((value) => String(value).toLocaleLowerCase('fr').includes(normalizedQuery))
+      })
+  }, [clients, query, salesDocuments, typeFilter])
   const table = useDataTable(filteredClients)
+
   const summary = useMemo(() => ({
     clientCount: clients.length,
     elevatorCount: clients.reduce((total, client) => total + getElevatorCount(client), 0),
     activeContracts: clients.filter((client) => client.contractStatus === 'Actif').length,
-    balance: clients.reduce((total, client) => total + getClientBalance(client, salesDocuments), 0),
+    balance: clients.reduce(
+      (total, client) => total + getClientBalance(client, salesDocuments),
+      0,
+    ),
   }), [clients, salesDocuments])
+
   const exportColumns = [
-    { label: 'Client', value: (client) => client.__clientName },
-    { label: 'Type', key: 'clientType' },
-    { label: 'Responsable', key: 'contactName' },
-    { label: 'Téléphone', value: (client) => client.phone || client.phone1 || client.phone2 },
-    { label: 'Email', key: 'email' },
+    { label: 'Type', value: (client) => client.__clientType },
+    { label: 'Raison sociale / nom', value: (client) => client.__clientName },
+    { label: 'Téléphone', value: (client) => client.__phone },
+    { label: 'E-mail', key: 'email' },
     { label: 'Ville', key: 'city' },
-    { label: 'Ascenseurs', value: (client) => client.__elevatorCount },
-    { label: 'Statut contrat', value: (client) => client.contractStatus || 'Aucun' },
-    { label: 'Solde restant', value: (client) => client.__balance },
+    { label: 'Nombre d’ascenseurs', value: (client) => client.__elevatorCount },
   ]
 
-  const updateFormField = (field, value) => {
-    setForm((current) => ({ ...current, [field]: value }))
-  }
-
-  const updateElevator = (index, field, value) => {
-    setForm((current) => ({
-      ...current,
-      elevators: current.elevators.map((elevator, itemIndex) =>
-        itemIndex === index ? { ...elevator, [field]: value } : elevator,
-      ),
-    }))
-  }
-
-  const openNewClient = () => {
-    setEditingId(null)
-    setForm(createEmptyClient())
-    setActiveTab('identity')
-    setActionError('')
+  const openCreateForm = () => {
+    setFormClient(null)
     setFormOpen(true)
+    setActionError('')
   }
 
-  const openEditClient = (client) => {
-    setEditingId(client.id)
-    setForm(getClientForm(client))
-    setActiveTab('identity')
-    setActionError('')
+  const openEditForm = (client) => {
+    setFormClient(client)
     setFormOpen(true)
+    setActionError('')
   }
 
-  const saveClient = async (event) => {
-    event.preventDefault()
+  const saveClient = async (formData) => {
+    setSaving(true)
     setActionError('')
-    const currentBalance = Number(form.currentBalance)
-    const undetailedElevatorCount = Number(form.undetailedElevatorCount)
-    const elevators = form.elevators.map((elevator) => ({
+    const data = { ...formData }
+    delete data.id
+    delete data.createdAt
+    delete data.updatedAt
+    delete data.__clientName
+    delete data.__clientType
+    delete data.__phone
+    delete data.__elevatorCount
+    delete data.__balance
+
+    const elevators = formData.elevators.map((elevator) => ({
       ...elevator,
-      id: String(elevator.id || `elevator-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
-      reference: String(elevator.reference || '').trim(),
-      brand: String(elevator.brand || '').trim(),
+      id: String(elevator.id),
+      reference: String(elevator.reference).trim(),
+      brand: String(elevator.brand).trim(),
       floors: Number(elevator.floors),
     }))
-    const elevatorReferences = elevators.map((elevator) => elevator.reference.toLocaleLowerCase('fr'))
-    const hasDuplicateElevatorReferences = new Set(elevatorReferences).size !== elevatorReferences.length
-    const email = String(form.email || '').trim()
-    const isEmailValid = !email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-    const invalidElevator = elevators.find(
-      (elevator) =>
-        !elevator.reference ||
-        !elevator.brand ||
-        !ELEVATOR_TYPES.includes(elevator.type) ||
-        !Number.isSafeInteger(elevator.floors) ||
-        elevator.floors < 1 ||
-        !ELEVATOR_STATUSES.includes(elevator.status),
+    const currentBalance = Number(formData.currentBalance)
+    const normalizedBalance =
+      Number.isFinite(currentBalance) && currentBalance >= 0
+        ? Math.round(currentBalance * 100) / 100
+        : 0
+    const knownBrands = String(formData.elevatorBrands || '')
+      .split(',')
+      .map((brand) => brand.trim())
+      .filter(Boolean)
+    const brandsByKey = new Map(
+      [...knownBrands, ...elevators.map((elevator) => elevator.brand)]
+        .filter(Boolean)
+        .map((brand) => [brand.toLocaleLowerCase('fr'), brand]),
     )
-
-    let validationError = ''
-    let validationTab = 'contract'
-    if (!String(form.name || '').trim()) {
-      validationError = 'Le nom du client ou de la résidence est obligatoire.'
-      validationTab = 'identity'
-    } else if (!CLIENT_TYPES.includes(form.clientType)) {
-      validationError = 'Sélectionnez un type de client valide.'
-      validationTab = 'identity'
-    } else if (!isEmailValid) {
-      validationError = 'Saisissez une adresse e-mail valide ou laissez le champ vide.'
-      validationTab = 'identity'
-    } else if (invalidElevator) {
-      validationError = 'Chaque ascenseur doit avoir un repère, une marque, un type, un nombre de niveaux valide et un état.'
-      validationTab = 'elevators'
-    } else if (hasDuplicateElevatorReferences) {
-      validationError = 'Chaque ascenseur doit avoir un repère unique pour ce client.'
-      validationTab = 'elevators'
-    } else if (
-      form.currentBalance === '' ||
-      !Number.isFinite(currentBalance) ||
-      currentBalance < 0 ||
-      !Number.isSafeInteger(Math.round(currentBalance * 100)) ||
-      !Number.isSafeInteger(undetailedElevatorCount) ||
-      undetailedElevatorCount < 0
-    ) {
-      validationError = 'Vérifiez le solde et le nombre d’équipements existants non détaillés.'
-    }
-
-    if (validationError) {
-      setActionError(validationError)
-      setActiveTab(validationTab)
-      return
-    }
-
-    setSaving(true)
-    const trimmedForm = Object.fromEntries(
-      Object.entries(form).map(([key, value]) => [
-        key,
-        typeof value === 'string' ? value.trim() : value,
-      ]),
-    )
-    const elevatorBrands = [...new Set([
-      ...String(trimmedForm.elevatorBrands || '')
-        .split(',')
-        .map((brand) => brand.trim())
-        .filter(Boolean),
-      ...elevators.map((elevator) => elevator.brand),
-    ])]
     const clientData = {
-      ...trimmedForm,
-      phone1: trimmedForm.phone,
+      ...data,
+      name: String(formData.name).trim(),
+      clientType: normalizeClientType(formData.clientType),
+      phone: String(formData.phone).trim(),
+      phone1: String(formData.phone).trim(),
+      phone2: String(formData.phone2 || '').trim(),
+      whatsapp: String(formData.whatsapp || '').trim(),
+      email: String(formData.email || '').trim(),
       elevators,
-      elevatorCount: elevators.length + undetailedElevatorCount,
-      undetailedElevatorCount,
-      elevatorBrands: elevatorBrands.join(', '),
-      currentBalance,
+      elevatorCount: elevators.length + formData.undetailedElevatorCount,
+      undetailedElevatorCount: formData.undetailedElevatorCount,
+      elevatorBrands: [...brandsByKey.values()].join(', '),
+      currentBalance: normalizedBalance,
+      contractType: formData.contractType || 'Aucun',
+      contractStatus: formData.contractStatus || 'Aucun',
     }
 
     try {
-      if (editingId) {
-        await updateDoc(doc(db, 'clients', editingId), {
+      if (formClient?.id) {
+        await updateDoc(doc(db, 'clients', formClient.id), {
           ...clientData,
           updatedAt: serverTimestamp(),
         })
@@ -433,119 +315,124 @@ export default function Clients() {
         })
       }
       setFormOpen(false)
-      setForm(createEmptyClient())
+      setFormClient(null)
+      setNotice(formClient ? 'La fiche client a été mise à jour.' : 'Le client a été créé.')
     } catch (saveError) {
-      setActionError(
-        saveError instanceof Error
-          ? saveError.message
-          : 'Impossible d’enregistrer le client.',
-      )
+      const message = saveError instanceof Error
+        ? saveError.message
+        : 'Impossible d’enregistrer le client.'
+      setActionError(message)
+      throw saveError
     } finally {
       setSaving(false)
     }
   }
 
-  const removeClient = async (client) => {
-    if (!window.confirm(`Supprimer la fiche de ${getClientName(client)} ?`)) return
-    setActionError('')
+  const confirmDelete = async () => {
+    if (!clientToDelete?.id) return
+    setDeletingId(clientToDelete.id)
+    setDeleteError('')
     try {
-      await deleteDoc(doc(db, 'clients', client.id))
-      if (expandedClientId === client.id) setExpandedClientId(null)
-    } catch (deleteError) {
-      setActionError(
-        deleteError instanceof Error
-          ? deleteError.message
-          : 'Impossible de supprimer le client.',
+      await deleteDoc(doc(db, 'clients', clientToDelete.id))
+      setExpandedClientId((current) => current === clientToDelete.id ? '' : current)
+      setClientToDelete(null)
+      setNotice('La fiche client a été supprimée.')
+    } catch (removeError) {
+      setDeleteError(
+        removeError instanceof Error ? removeError.message : 'Impossible de supprimer le client.',
       )
+    } finally {
+      setDeletingId('')
     }
   }
 
-  const exportClient = async (client) => {
-    setExportingId(client.id)
+  const exportClient = (client) => {
     setActionError('')
-    try {
-      const companySnapshot = await getDoc(doc(db, 'settings', 'company'))
-      const company = companySnapshot.exists() ? companySnapshot.data() : {}
-      const invoices = salesDocuments.filter(
-        (invoice) => invoice.type === 'invoice' && invoice.clientId === client.id,
-      )
-      const filename = `fiche-client-${getClientName(client)
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-zA-Z0-9]+/g, '-')
-        .replace(/^-|-$/g, '')
-        .toLowerCase()}.pdf`
-      setPdfRequest({ client, company, invoices, filename })
-    } catch (exportError) {
-      setActionError(
-        exportError instanceof Error
-          ? exportError.message
-          : 'Impossible de charger les paramètres société pour le PDF.',
-      )
-      setExportingId(null)
-    }
+    setExportingId(client.id)
+    const invoices = salesDocuments.filter(
+      (invoice) => invoice.type === 'invoice' && invoice.clientId === client.id,
+    )
+    setPdfRequest({
+      client,
+      company: companySettings,
+      invoices,
+      filename: `fiche-client-${safeFilename(client.__clientName || getClientName(client))}.pdf`,
+    })
   }
 
   useEffect(() => {
     if (!pdfRequest || !pdfRef.current) return undefined
-    let cancelled = false
+    let active = true
     const generate = async () => {
       try {
         const { default: generatePdf } = await import('../utils/pdfEngine')
         await generatePdf(pdfRef.current, pdfRequest.filename, pdfRequest.company)
       } catch (exportError) {
-        if (!cancelled) {
+        if (active) {
           setActionError(
             exportError instanceof Error
               ? exportError.message
-              : 'Impossible de générer la fiche PDF.',
+              : 'Impossible de générer la fiche PDF du client.',
           )
         }
       } finally {
-        if (!cancelled) {
-          setExportingId(null)
+        if (active) {
+          setExportingId('')
           setPdfRequest(null)
         }
       }
     }
     void generate()
     return () => {
-      cancelled = true
+      active = false
     }
   }, [pdfRequest])
 
-  const pageError = actionError || loadError || salesError || legacySalesError || settingsError
+  const pageError = actionError || clientsError || salesError || legacySalesError || settingsError
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8 sm:px-8 sm:py-10">
-      <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
+      <Toast notice={notice} onDismiss={() => setNotice('')} />
+
+      <header className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-700">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-700">
             Répertoire & parc technique
           </p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Clients</h1>
           <p className="mt-2 text-sm text-slate-500">
-            Gérez les contacts, contrats et ascenseurs de chaque site.
+            Gérez les contacts et les ascenseurs de chaque résidence ou entreprise.
           </p>
         </div>
         <button
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-steel-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-steel-900/15 transition hover:-translate-y-0.5 hover:bg-steel-800"
-          onClick={openNewClient}
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-900/15 transition hover:-translate-y-0.5 hover:bg-blue-800"
+          onClick={openCreateForm}
           type="button"
         >
           <Plus aria-hidden="true" size={18} />
           Nouveau client
         </button>
-      </div>
+      </header>
 
-      <section aria-label="Synthèse du portefeuille clients" className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section
+        aria-label="Synthèse du portefeuille clients"
+        className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
+      >
         {[
           { label: 'Clients suivis', value: summary.clientCount, icon: Building, tone: 'bg-steel-50 text-steel-700' },
           { label: 'Ascenseurs au parc', value: summary.elevatorCount, icon: ArrowUpDown, tone: 'bg-amber-50 text-amber-700' },
-          { label: 'Contrats actifs', value: summary.activeContracts, icon: Landmark, tone: 'bg-emerald-50 text-emerald-700' },
-          { label: 'Solde restant', value: formatClientCurrency(summary.balance, companySettings.defaultCurrency), icon: CircleDollarSign, tone: 'bg-orange-50 text-orange-700' },
+          { label: 'Contrats actifs', value: summary.activeContracts, icon: CheckCircle2, tone: 'bg-emerald-50 text-emerald-700' },
+          {
+            label: 'Solde restant',
+            value: formatCurrency(summary.balance, companySettings.defaultCurrency),
+            icon: CircleDollarSign,
+            tone: 'bg-orange-50 text-orange-700',
+          },
         ].map(({ label, value, icon: Icon, tone }) => (
-          <article className="rounded-2xl border border-white bg-white/85 p-4 shadow-sm ring-1 ring-slate-200/70 backdrop-blur transition hover:-translate-y-0.5 hover:shadow-md" key={label}>
+          <article
+            className="rounded-2xl border border-white bg-white/85 p-4 shadow-sm ring-1 ring-slate-200/70 backdrop-blur transition hover:-translate-y-0.5 hover:shadow-md"
+            key={label}
+          >
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs font-medium text-slate-500">{label}</p>
               <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${tone}`}>
@@ -558,107 +445,96 @@ export default function Clients() {
       </section>
 
       <section className="mt-8 overflow-hidden rounded-2xl border border-white bg-white/90 shadow-xl shadow-slate-900/[0.04] ring-1 ring-slate-200/70 backdrop-blur-xl">
-        <div className="flex flex-col gap-4 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
-              <Building size={19} />
+        <div className="flex flex-col gap-4 border-b border-slate-100 p-4 sm:px-6 sm:py-5">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-steel-50 text-steel-700">
+                <Users aria-hidden="true" size={19} />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">Répertoire clients</h2>
+                <p className="text-xs text-slate-500">
+                  {filteredClients.length} résultat{filteredClients.length === 1 ? '' : 's'}
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm font-semibold text-slate-900">Tous les clients</p>
-              <p className="text-xs text-slate-500">
-                {summary.clientCount} fiche{summary.clientCount === 1 ? '' : 's'}
-              </p>
-            </div>
-          </div>
-          <div className="grid w-full gap-2 sm:max-w-2xl sm:grid-cols-[minmax(190px,1fr)_180px_170px]">
-            <label className="relative block">
-              <Search
-                aria-hidden="true"
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                size={17}
-              />
-              <input
-                className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+            <div className="grid w-full gap-2 sm:max-w-2xl sm:grid-cols-[minmax(190px,1fr)_190px]">
+              <label className="relative block">
+                <span className="sr-only">Rechercher un client</span>
+                <Search
+                  aria-hidden="true"
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                  size={17}
+                />
+                <input
+                  className={`${inputClass} pl-10`}
+                  onChange={(event) => {
+                    setQuery(event.target.value)
+                    table.setPage(1)
+                  }}
+                  placeholder="Rechercher nom, contact, ville…"
+                  type="search"
+                  value={query}
+                />
+              </label>
+              <select
+                aria-label="Filtrer par type de client"
+                className={inputClass}
                 onChange={(event) => {
-                  setQuery(event.target.value)
+                  setTypeFilter(event.target.value)
                   table.setPage(1)
                 }}
-                placeholder="Rechercher un client ou un ascenseur…"
-                type="search"
-                value={query}
-              />
-            </label>
-            <select
-              aria-label="Filtrer par type de client"
-              className={fieldClass}
-              onChange={(event) => {
-                setTypeFilter(event.target.value)
-                table.setPage(1)
-              }}
-              value={typeFilter}
-            >
-              <option value="">Tous les types</option>
-              {CLIENT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
-            </select>
-            <select
-              aria-label="Filtrer par statut du contrat"
-              className={fieldClass}
-              onChange={(event) => {
-                setContractStatusFilter(event.target.value)
-                table.setPage(1)
-              }}
-              value={contractStatusFilter}
-            >
-              <option value="">Tous les statuts</option>
-              {CONTRACT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
-            </select>
+                value={typeFilter}
+              >
+                <option value="">Tous les types</option>
+                {CLIENT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+            </div>
           </div>
-        </div>
-        <div className="border-b border-slate-100 px-4 py-3 sm:px-6">
-          <DataTableExportToolbar columns={exportColumns} rows={table.sortedItems} title="Liste des clients" />
+          <DataTableExportToolbar
+            columns={exportColumns}
+            rows={table.sortedItems}
+            title="Liste des clients"
+          />
         </div>
 
         {pageError && (
-          <p
-            className="m-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 sm:mx-6"
-            role="alert"
-          >
+          <p className="m-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 sm:mx-6" role="alert">
             {pageError}
           </p>
         )}
 
         {dataLoading ? (
-          <TableSkeleton columns={7} minWidth={980} />
+          <TableSkeleton columns={7} minWidth={1080} />
         ) : filteredClients.length === 0 ? (
           <EmptyState
-            actionLabel={query || typeFilter || contractStatusFilter ? 'Effacer les filtres' : 'Ajouter un client'}
-            description={query || typeFilter || contractStatusFilter
-              ? 'Essayez une autre recherche ou réinitialisez les filtres actifs.'
-              : 'Créez une fiche client pour associer les contacts, contrats et ascenseurs du site.'}
+            actionLabel={query || typeFilter ? 'Effacer les filtres' : 'Créer une fiche client'}
+            description={query || typeFilter
+              ? 'Aucun résultat ne correspond à ces critères. Modifiez la recherche ou réinitialisez les filtres.'
+              : 'Ajoutez un client pour enregistrer ses coordonnées et son parc d’ascenseurs.'}
             icon={Building}
             onAction={() => {
-              if (query || typeFilter || contractStatusFilter) {
+              if (query || typeFilter) {
                 setQuery('')
                 setTypeFilter('')
-                setContractStatusFilter('')
                 table.setPage(1)
               } else {
-                openNewClient()
+                openCreateForm()
               }
             }}
-            title={query || typeFilter || contractStatusFilter ? 'Aucun client trouvé' : 'Aucun client enregistré'}
+            title={query || typeFilter ? 'Aucun client trouvé' : 'Aucun client enregistré'}
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] text-left">
+            <table className="w-full min-w-[1080px] text-left">
               <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 <tr>
-                  <SortableTableHeader className="px-6 py-3.5" columnKey="__clientName" label="Client" {...table} />
-                  <SortableTableHeader className="px-5 py-3.5" columnKey="contactName" label="Contact" {...table} />
+                  <SortableTableHeader className="px-5 py-3.5" columnKey="__clientType" label="Type" {...table} />
+                  <SortableTableHeader className="px-5 py-3.5" columnKey="__clientName" label="Raison sociale / nom" {...table} />
+                  <SortableTableHeader className="px-5 py-3.5" columnKey="__phone" label="Téléphone" {...table} />
+                  <SortableTableHeader className="px-5 py-3.5" columnKey="email" label="E-mail" {...table} />
                   <SortableTableHeader className="px-5 py-3.5" columnKey="city" label="Ville" {...table} />
                   <SortableTableHeader className="px-5 py-3.5" columnKey="__elevatorCount" label="Ascenseurs" {...table} />
-                  <SortableTableHeader className="px-5 py-3.5" columnKey="contractStatus" label="Statut contrat" {...table} />
-                  <SortableTableHeader className="px-5 py-3.5" columnKey="__balance" label="Solde" {...table} />
                   <th className="px-5 py-3.5 text-right">Actions</th>
                 </tr>
               </thead>
@@ -666,101 +542,114 @@ export default function Clients() {
                 {table.pageItems.map((client) => {
                   const expanded = expandedClientId === client.id
                   const elevators = Array.isArray(client.elevators) ? client.elevators : []
-                  const balance = client.__balance
+                  const TypeIcon = client.__clientType === 'Particulier' ? Users : Building
                   return (
                     <Fragment key={client.id}>
-                      <tr className="transition hover:bg-slate-50/70">
-                        <td className="px-6 py-4">
-                          <p className="text-sm font-semibold text-slate-900">{getClientName(client)}</p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            {client.clientType || 'Entreprise'} · {client.contractType || 'Aucun'}
-                          </p>
-                        </td>
+                      <tr className="transition hover:bg-slate-50/80">
                         <td className="px-5 py-4">
-                          <p className="text-sm text-slate-700">{client.contactName || '—'}</p>
-                          <p className="mt-1 text-xs text-slate-500">{client.phone || client.phone1 || client.phone2 || '—'}</p>
-                        </td>
-                        <td className="px-5 py-4 text-sm text-slate-600">{client.city || '—'}</td>
-                        <td className="px-5 py-4 text-sm font-semibold text-slate-700">{getElevatorCount(client)}</td>
-                        <td className="px-5 py-4">
-                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            client.contractStatus === 'Actif'
-                              ? 'bg-emerald-50 text-emerald-700'
-                              : client.contractStatus === 'Suspendu'
-                                ? 'bg-amber-50 text-amber-700'
-                                : 'bg-slate-100 text-slate-600'
-                          }`}>
-                            {client.contractStatus === 'Actif'
-                              ? <CheckCircle2 className="mr-1 inline" size={13} />
-                              : client.contractStatus === 'Suspendu'
-                                ? <AlertCircle className="mr-1 inline" size={13} />
-                                : null}
-                            {client.contractStatus || 'Aucun'}
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-steel-100 bg-steel-50 px-2.5 py-1 text-xs font-semibold text-steel-800">
+                            <TypeIcon aria-hidden="true" size={13} />
+                            {client.__clientType}
                           </span>
                         </td>
+                        <td className="px-5 py-4">
+                          <p className="max-w-64 truncate text-sm font-semibold text-slate-900">
+                            {client.__clientName}
+                          </p>
+                          {client.contactName && (
+                            <p className="mt-1 max-w-64 truncate text-xs text-slate-500">
+                              {client.contactName}
+                            </p>
+                          )}
+                        </td>
                         <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
-                          {formatClientCurrency(balance, companySettings.defaultCurrency)}
+                          {client.__phone || '—'}
+                        </td>
+                        <td className="px-5 py-4">
+                          <span className="block max-w-56 truncate text-sm text-slate-600">
+                            {client.email || '—'}
+                          </span>
+                        </td>
+                        <td className="px-5 py-4 text-sm text-slate-600">{client.city || '—'}</td>
+                        <td className="px-5 py-4">
+                          <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+                            <ArrowUpDown aria-hidden="true" className="text-amber-600" size={15} />
+                            {client.__elevatorCount}
+                          </span>
                         </td>
                         <td className="px-5 py-4">
                           <div className="flex justify-end gap-1">
                             <button
-                              aria-controls={`client-details-${client.id}`}
+                              aria-controls={`client-elevators-${client.id}`}
                               aria-expanded={expanded}
-                              aria-label={`${expanded ? 'Masquer' : 'Voir'} le parc de ${getClientName(client)}`}
-                              className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition ${expanded ? 'bg-steel-50 text-steel-700' : 'text-slate-500 hover:bg-steel-50 hover:text-steel-700'}`}
-                              onClick={() => setExpandedClientId(expanded ? null : client.id)}
+                              aria-label={`${expanded ? 'Masquer' : 'Voir'} le parc de ${client.__clientName}`}
+                              className={`rounded-lg p-2 transition ${expanded ? 'bg-steel-50 text-steel-700' : 'text-slate-500 hover:bg-steel-50 hover:text-steel-700'}`}
+                              onClick={() => setExpandedClientId(expanded ? '' : client.id)}
                               title={expanded ? 'Masquer le parc' : 'Voir le parc'}
                               type="button"
                             >
-                              <span className="hidden xl:inline">{expanded ? 'Masquer' : 'Voir le parc'}</span>
-                              <ChevronDown className={`transition-transform ${expanded ? 'rotate-180' : ''}`} size={17} />
+                              <ChevronDown
+                                aria-hidden="true"
+                                className={`transition-transform ${expanded ? 'rotate-180' : ''}`}
+                                size={17}
+                              />
                             </button>
                             <button
-                              aria-label={`Générer la fiche PDF de ${getClientName(client)}`}
-                              className="rounded-lg p-2 text-slate-500 hover:bg-blue-50 hover:text-blue-700 disabled:opacity-50"
+                              aria-label={`Exporter la fiche PDF de ${client.__clientName}`}
+                              className="rounded-lg p-2 text-slate-500 transition hover:bg-blue-50 hover:text-blue-700 disabled:cursor-wait disabled:opacity-50"
                               disabled={exportingId === client.id}
-                              onClick={() => void exportClient(client)}
-                              title="Générer la fiche PDF"
+                              onClick={() => exportClient(client)}
+                              title="Exporter la fiche PDF"
                               type="button"
                             >
-                              <FileDown size={17} />
+                              {exportingId === client.id
+                                ? <LoaderCircle aria-hidden="true" className="animate-spin" size={17} />
+                                : <FileDown aria-hidden="true" size={17} />}
                             </button>
                             <button
-                              aria-label={`Modifier ${getClientName(client)}`}
-                              className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
-                              onClick={() => openEditClient(client)}
-                              title="Modifier"
+                              aria-label={`Voir ou modifier ${client.__clientName}`}
+                              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-semibold text-steel-700 transition hover:bg-steel-50"
+                              onClick={() => openEditForm(client)}
+                              title="Voir / Modifier"
                               type="button"
                             >
-                              <Pencil size={16} />
+                              <Pencil aria-hidden="true" size={15} />
+                              <span className="hidden xl:inline">Voir / Modifier</span>
                             </button>
                             <button
-                              aria-label={`Supprimer ${getClientName(client)}`}
-                              className="rounded-lg p-2 text-slate-500 hover:bg-red-50 hover:text-red-700"
-                              onClick={() => void removeClient(client)}
+                              aria-label={`Supprimer ${client.__clientName}`}
+                              className="rounded-lg p-2 text-slate-500 transition hover:bg-red-50 hover:text-red-700"
+                              onClick={() => {
+                                setDeleteError('')
+                                setClientToDelete(client)
+                              }}
                               title="Supprimer"
                               type="button"
                             >
-                              <Trash2 size={16} />
+                              <Trash2 aria-hidden="true" size={16} />
                             </button>
                           </div>
                         </td>
                       </tr>
                       {expanded && (
-                        <tr id={`client-details-${client.id}`} className="bg-slate-50/80">
-                          <td className="px-6 py-5" colSpan={7}>
-                            <div className="grid gap-5 lg:grid-cols-[minmax(0,1.3fr)_minmax(240px,.7fr)]">
-                              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                        <tr className="bg-slate-50/80">
+                          <td className="px-5 py-5" colSpan={7}>
+                            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(240px,.7fr)]">
+                              <section
+                                aria-label={`Parc d’ascenseurs de ${client.__clientName}`}
+                                className="overflow-hidden rounded-xl border border-slate-200 bg-white"
+                                id={`client-elevators-${client.id}`}
+                              >
                                 <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
                                   <div>
                                     <h3 className="text-sm font-semibold text-slate-900">Parc d’ascenseurs</h3>
                                     <p className="mt-0.5 text-xs text-slate-500">
-                                      {elevators.length} équipement{elevators.length === 1 ? '' : 's'} détaillé{elevators.length === 1 ? '' : 's'}
+                                      {client.__elevatorCount} équipement(s) au total
                                     </p>
                                   </div>
                                   <button
-                                    className="text-xs font-semibold text-blue-700 hover:text-blue-900"
-                                    onClick={() => openEditClient(client)}
+                                    className="text-xs font-semibold text-steel-700 hover:text-steel-900"
+                                    onClick={() => openEditForm(client)}
                                     type="button"
                                   >
                                     Gérer le parc
@@ -781,13 +670,15 @@ export default function Clients() {
                                       <tbody className="divide-y divide-slate-100">
                                         {elevators.map((elevator, index) => (
                                           <tr key={elevator.id || `${client.id}-elevator-${index}`}>
-                                            <td className="px-4 py-3 font-semibold text-slate-800">{elevator.reference || '—'}</td>
+                                            <td className="px-4 py-3 font-semibold text-slate-800">
+                                              {elevator.reference || '—'}
+                                            </td>
                                             <td className="px-4 py-3 text-slate-600">{elevator.brand || '—'}</td>
                                             <td className="px-4 py-3 text-slate-600">{elevator.type || '—'}</td>
                                             <td className="px-4 py-3 text-slate-600">{elevator.floors ?? '—'}</td>
                                             <td className="px-4 py-3">
                                               <span className={`rounded-full px-2 py-1 font-medium ${elevatorStatusClass[elevator.status] || 'bg-slate-100 text-slate-600'}`}>
-                                                {elevator.status || '—'}
+                                                {elevator.status === 'En service' ? 'En marche' : elevator.status || '—'}
                                               </span>
                                             </td>
                                           </tr>
@@ -797,39 +688,37 @@ export default function Clients() {
                                   </div>
                                 ) : (
                                   <p className="px-4 py-5 text-xs text-slate-500">
-                                    Aucun équipement détaillé. {getLegacyElevatorCount(client) > 0 && `${getLegacyElevatorCount(client)} ascenseur(s) historique(s) restent à détailler.`}
+                                    Aucun équipement détaillé n’est enregistré.
                                   </p>
                                 )}
-                                {getLegacyElevatorCount(client) > 0 && elevators.length > 0 && (
+                                {getLegacyElevatorCount(client) > 0 && (
                                   <p className="border-t border-slate-100 px-4 py-3 text-xs text-amber-700">
-                                    {getLegacyElevatorCount(client)} équipement(s) historique(s) non détaillé(s).
+                                    {getLegacyElevatorCount(client)} ascenseur(s) historique(s) restent à détailler.
                                   </p>
                                 )}
-                              </div>
-                              <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
-                                <h3 className="text-sm font-semibold text-slate-900">Informations du site</h3>
+                              </section>
+                              <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+                                <h3 className="text-sm font-semibold text-slate-900">Coordonnées du site</h3>
                                 <p className="flex gap-2 text-xs leading-5 text-slate-600">
-                                  <MapPin className="mt-0.5 shrink-0 text-slate-400" size={15} />
-                                  {[
-                                    client.address,
-                                    client.city,
-                                    client.postalCode,
-                                  ].filter(Boolean).join(', ') || 'Adresse non renseignée'}
+                                  <MapPin aria-hidden="true" className="mt-0.5 shrink-0 text-slate-400" size={15} />
+                                  {[client.address, client.city, client.postalCode].filter(Boolean).join(', ') || 'Adresse non renseignée'}
                                 </p>
                                 <p className="flex gap-2 text-xs leading-5 text-slate-600">
-                                  <Phone className="mt-0.5 shrink-0 text-slate-400" size={15} />
-                                  {[client.phone || client.phone1, client.phone2].filter(Boolean).join(' · ') || 'Téléphone non renseigné'}
+                                  <Phone aria-hidden="true" className="mt-0.5 shrink-0 text-slate-400" size={15} />
+                                  {client.__phone || 'Téléphone non renseigné'}
                                 </p>
                                 <p className="flex gap-2 break-all text-xs leading-5 text-slate-600">
-                                  <Mail className="mt-0.5 shrink-0 text-slate-400" size={15} />
+                                  <Mail aria-hidden="true" className="mt-0.5 shrink-0 text-slate-400" size={15} />
                                   {client.email || 'E-mail non renseigné'}
                                 </p>
-                                <div className="border-t border-slate-100 pt-3 text-xs text-slate-600">
-                                  <p>Contrat : <strong>{client.contractType || 'Aucun'}</strong></p>
-                                  <p className="mt-1">Échéance : <strong>{client.contractEndDate || '—'}</strong></p>
-                                  <p className="mt-1">Solde : <strong>{formatClientCurrency(balance, companySettings.defaultCurrency)}</strong></p>
-                                </div>
-                              </div>
+                                {client.ice && (
+                                  <p className="text-xs text-slate-600">ICE : <strong>{client.ice}</strong></p>
+                                )}
+                                <p className="border-t border-slate-100 pt-3 text-xs text-slate-600">
+                                  Solde restant :{' '}
+                                  <strong>{formatCurrency(client.__balance, companySettings.defaultCurrency)}</strong>
+                                </p>
+                              </section>
                             </div>
                           </td>
                         </tr>
@@ -845,335 +734,62 @@ export default function Clients() {
       </section>
 
       {formOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/50 p-3 sm:p-6">
+        <ClientForm
+          client={formClient}
+          companySettings={companySettings}
+          onCancel={() => {
+            if (!saving) {
+              setFormOpen(false)
+              setFormClient(null)
+            }
+          }}
+          onSave={saveClient}
+          saving={saving}
+        />
+      )}
+
+      {clientToDelete && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
           <section
-            aria-labelledby="client-form-title"
+            aria-describedby="delete-client-description"
+            aria-labelledby="delete-client-title"
             aria-modal="true"
-            className="my-auto w-full max-w-5xl animate-slide-up rounded-2xl bg-white shadow-2xl"
-            role="dialog"
+            className="w-full max-w-md animate-slide-up rounded-2xl border border-white/70 bg-white p-6 shadow-2xl"
+            role="alertdialog"
           >
-            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-7">
-              <div>
-                <h2 className="text-lg font-semibold text-slate-900" id="client-form-title">
-                  {editingId ? 'Modifier le client' : 'Nouveau client'}
-                </h2>
-                <p className="mt-1 text-xs text-slate-500">
-                  Coordonnées, parc technique et situation contractuelle.
-                </p>
-              </div>
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-red-700">
+              <Trash2 aria-hidden="true" size={20} />
+            </div>
+            <h2 className="mt-4 text-lg font-semibold text-slate-900" id="delete-client-title">
+              Supprimer cette fiche client ?
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600" id="delete-client-description">
+              La fiche de <strong>{getClientName(clientToDelete)}</strong> sera supprimée. Cette action est irréversible.
+            </p>
+            {deleteError && (
+              <p className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+                {deleteError}
+              </p>
+            )}
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <button
-                aria-label="Fermer"
-                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-                onClick={() => setFormOpen(false)}
+                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
+                disabled={Boolean(deletingId)}
+                onClick={() => setClientToDelete(null)}
                 type="button"
               >
-                <X size={19} />
+                Annuler
+              </button>
+              <button
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-800 disabled:cursor-wait disabled:opacity-60"
+                disabled={Boolean(deletingId)}
+                onClick={() => void confirmDelete()}
+                type="button"
+              >
+                {deletingId && <LoaderCircle aria-hidden="true" className="animate-spin" size={16} />}
+                {deletingId ? 'Suppression…' : 'Supprimer le client'}
               </button>
             </div>
-
-            <div aria-label="Sections du formulaire client" className="flex gap-1 overflow-x-auto border-b border-slate-100 px-4 pt-3 sm:px-7" role="tablist">
-              {TABS.map((tab) => (
-                <button
-                  aria-controls={`client-panel-${tab.id}`}
-                  aria-selected={activeTab === tab.id}
-                  className={`whitespace-nowrap rounded-t-lg border-b-2 px-3 py-3 text-xs font-semibold transition sm:px-4 sm:text-sm ${
-                    activeTab === tab.id
-                      ? 'border-blue-700 text-blue-800'
-                      : 'border-transparent text-slate-500 hover:text-slate-800'
-                  }`}
-                  id={`client-tab-${tab.id}`}
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  role="tab"
-                  type="button"
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
-            <form
-              className="max-h-[calc(100vh-240px)] overflow-y-auto px-5 py-5 sm:px-7"
-              onSubmit={saveClient}
-            >
-              <section
-                aria-labelledby={`client-tab-${activeTab}`}
-                id={`client-panel-${activeTab}`}
-                role="tabpanel"
-                tabIndex={0}
-              >
-                {activeTab === 'identity' && (
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Type de client *">
-                      <SelectInput
-                        onChange={(event) => updateFormField('clientType', event.target.value)}
-                        options={CLIENT_TYPES}
-                        value={form.clientType}
-                      />
-                    </Field>
-                    <Field label="Nom de la résidence / raison sociale *">
-                      <TextInput
-                        autoFocus
-                        onChange={(event) => updateFormField('name', event.target.value)}
-                        required
-                        value={form.name}
-                      />
-                    </Field>
-                    <Field label="Nom du responsable">
-                      <TextInput
-                        onChange={(event) => updateFormField('contactName', event.target.value)}
-                        value={form.contactName}
-                      />
-                    </Field>
-                    <Field label="Téléphone 1">
-                      <TextInput
-                        onChange={(event) => updateFormField('phone', event.target.value)}
-                        type="tel"
-                        value={form.phone}
-                      />
-                    </Field>
-                    <Field label="Téléphone 2">
-                      <TextInput
-                        onChange={(event) => updateFormField('phone2', event.target.value)}
-                        type="tel"
-                        value={form.phone2}
-                      />
-                    </Field>
-                    <Field label="E-mail">
-                      <TextInput
-                        onChange={(event) => updateFormField('email', event.target.value)}
-                        type="email"
-                        value={form.email}
-                      />
-                    </Field>
-                    <Field label="ICE">
-                      <TextInput onChange={(event) => updateFormField('ice', event.target.value)} value={form.ice} />
-                    </Field>
-                    <Field label="Registre de commerce (RC)">
-                      <TextInput onChange={(event) => updateFormField('rc', event.target.value)} value={form.rc} />
-                    </Field>
-                    <Field label="Identifiant fiscal (IF)">
-                      <TextInput onChange={(event) => updateFormField('if', event.target.value)} value={form.if} />
-                    </Field>
-                    <Field label="Patente">
-                      <TextInput onChange={(event) => updateFormField('patente', event.target.value)} value={form.patente} />
-                    </Field>
-                    <Field label="Notes" wide>
-                      <textarea
-                        className={`${fieldClass} min-h-24 resize-y`}
-                        onChange={(event) => updateFormField('notes', event.target.value)}
-                        placeholder="Informations complémentaires"
-                        value={form.notes}
-                      />
-                    </Field>
-                  </div>
-                )}
-
-                {activeTab === 'location' && (
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Adresse exacte de l’immeuble / site" wide>
-                      <TextInput
-                        onChange={(event) => updateFormField('address', event.target.value)}
-                        value={form.address}
-                      />
-                    </Field>
-                    <Field label="Ville">
-                      <TextInput onChange={(event) => updateFormField('city', event.target.value)} value={form.city} />
-                    </Field>
-                    <Field label="Code postal">
-                      <TextInput onChange={(event) => updateFormField('postalCode', event.target.value)} value={form.postalCode} />
-                    </Field>
-                  </div>
-                )}
-
-                {activeTab === 'elevators' && (
-                  <div className="space-y-4">
-                    <div className="flex flex-col justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50/70 p-4 sm:flex-row sm:items-center">
-                      <div>
-                        <p className="text-sm font-semibold text-blue-950">Parc d’ascenseurs</p>
-                        <p className="mt-1 text-xs leading-5 text-blue-800">
-                          {form.elevators.length} équipement(s) détaillé(s)
-                          {Number(form.undetailedElevatorCount) > 0 &&
-                            ` · ${form.undetailedElevatorCount} équipement(s) historique(s) non détaillé(s)`}
-                        </p>
-                      </div>
-                      <button
-                        className="inline-flex items-center justify-center gap-2 self-start rounded-lg bg-blue-800 px-3.5 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-900 sm:self-auto"
-                        onClick={() => {
-                          setForm((current) => ({
-                            ...current,
-                            elevators: [...current.elevators, createEmptyElevator()],
-                          }))
-                        }}
-                        type="button"
-                      >
-                        <Plus size={15} />
-                        Ajouter un ascenseur
-                      </button>
-                    </div>
-
-                    {Number(form.undetailedElevatorCount) > 0 && (
-                      <Field label="Ascenseurs existants non détaillés">
-                        <TextInput
-                          min="0"
-                          onChange={(event) => {
-                            const count = event.target.value
-                            updateFormField('undetailedElevatorCount', count === '' ? '' : Number(count))
-                          }}
-                          step="1"
-                          type="number"
-                          value={form.undetailedElevatorCount}
-                        />
-                      </Field>
-                    )}
-
-                    {form.elevators.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-slate-300 px-5 py-10 text-center">
-                        <p className="text-sm font-medium text-slate-700">Aucun équipement détaillé</p>
-                        <p className="mt-1 text-xs text-slate-500">
-                          Ajoutez un ascenseur pour renseigner son repère, sa marque et son état.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {form.elevators.map((elevator, index) => (
-                          <section
-                            className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
-                            key={elevator.id || index}
-                          >
-                            <div className="mb-4 flex items-center justify-between">
-                              <h3 className="text-sm font-semibold text-slate-900">
-                                Ascenseur {index + 1}
-                              </h3>
-                              <button
-                                aria-label={`Retirer l’ascenseur ${index + 1}`}
-                                className="rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-                                onClick={() => {
-                                  setForm((current) => ({
-                                    ...current,
-                                    elevators: current.elevators.filter((_, itemIndex) => itemIndex !== index),
-                                  }))
-                                }}
-                                type="button"
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                              <Field label="Repère / numéro *">
-                                <TextInput
-                                  onChange={(event) => updateElevator(index, 'reference', event.target.value)}
-                                  placeholder="Ascenseur A, Bloc B…"
-                                  required
-                                  value={elevator.reference}
-                                />
-                              </Field>
-                              <Field label="Marque *">
-                                <TextInput
-                                  onChange={(event) => updateElevator(index, 'brand', event.target.value)}
-                                  placeholder="Otis, Schindler, TGI…"
-                                  required
-                                  value={elevator.brand}
-                                />
-                              </Field>
-                              <Field label="Type *">
-                                <SelectInput
-                                  onChange={(event) => updateElevator(index, 'type', event.target.value)}
-                                  options={ELEVATOR_TYPES}
-                                  value={elevator.type}
-                                />
-                              </Field>
-                              <Field label="Nombre d’arrêts / niveaux *">
-                                <TextInput
-                                  min="1"
-                                  onChange={(event) => updateElevator(index, 'floors', event.target.value)}
-                                  required
-                                  step="1"
-                                  type="number"
-                                  value={elevator.floors}
-                                />
-                              </Field>
-                              <Field label="État actuel *">
-                                <SelectInput
-                                  onChange={(event) => updateElevator(index, 'status', event.target.value)}
-                                  options={ELEVATOR_STATUSES}
-                                  value={elevator.status}
-                                />
-                              </Field>
-                            </div>
-                          </section>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {activeTab === 'contract' && (
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Type de contrat actuel">
-                      <SelectInput
-                        onChange={(event) => updateFormField('contractType', event.target.value)}
-                        options={CONTRACT_TYPES}
-                        value={form.contractType}
-                      />
-                    </Field>
-                    <Field label="Statut du contrat">
-                      <SelectInput
-                        onChange={(event) => updateFormField('contractStatus', event.target.value)}
-                        options={CONTRACT_STATUSES}
-                        value={form.contractStatus}
-                      />
-                    </Field>
-                    <Field label="Date d’échéance du contrat">
-                      <TextInput
-                        onChange={(event) => updateFormField('contractEndDate', event.target.value)}
-                        type="date"
-                        value={form.contractEndDate}
-                      />
-                    </Field>
-                    <Field label={`Solde actuel / impayés (${companySettings.defaultCurrency || 'MAD'})`}>
-                      <TextInput
-                        min="0"
-                        onChange={(event) => updateFormField('currentBalance', event.target.value)}
-                        required
-                        step="0.01"
-                        type="number"
-                        value={form.currentBalance}
-                      />
-                    </Field>
-                    <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs leading-5 text-slate-600">
-                      Le solde affiché dans le tableau et la fiche PDF est calculé à partir des factures ouvertes lorsqu’elles existent. Sinon, le solde saisi ici est utilisé.
-                    </div>
-                  </div>
-                )}
-              </section>
-
-              {pageError && (
-                <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
-                  {actionError || pageError}
-                </p>
-              )}
-              <div className="mt-6 flex justify-end gap-3 border-t border-slate-100 pt-4">
-                <button
-                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
-                  onClick={() => setFormOpen(false)}
-                  type="button"
-                >
-                  Annuler
-                </button>
-                <button
-                  className="rounded-xl bg-blue-800 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-900 disabled:opacity-60"
-                  disabled={saving}
-                  type="submit"
-                >
-                  {saving
-                    ? 'Enregistrement…'
-                    : editingId
-                      ? 'Enregistrer les modifications'
-                      : 'Créer le client'}
-                </button>
-              </div>
-            </form>
           </section>
         </div>
       )}

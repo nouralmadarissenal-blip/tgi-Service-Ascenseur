@@ -3,13 +3,12 @@ import { Link } from 'react-router-dom'
 import {
   Banknote,
   Building2,
-  CalendarDays,
   Check,
+  ListChecks,
   FileText,
   LoaderCircle,
   Plus,
   ShieldCheck,
-  Wrench,
   X,
 } from 'lucide-react'
 import { getDefaultClauses } from './contractClauses'
@@ -19,14 +18,10 @@ const inputClass =
   'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500'
 
 const contractTypes = [
-  { value: 'intervention', label: 'Maintenance' },
+  { value: 'maintenance_preventive', label: 'Maintenance préventive' },
+  { value: 'maintenance_complete', label: 'Maintenance complète' },
   { value: 'installation', label: 'Installation' },
   { value: 'modernisation', label: 'Modernisation' },
-]
-
-const contractVersions = [
-  { value: 'simple', label: 'Version simple' },
-  { value: 'complete', label: 'Version complète' },
 ]
 
 const billingFrequencies = [
@@ -36,13 +31,14 @@ const billingFrequencies = [
   'À la livraison',
 ]
 
+const visitFrequencies = ['Mensuelle', 'Trimestrielle', 'Annuelle']
 const slaOptions = ['2h', '4h', '12h', '24h']
 const taxRates = [20, 14, 0]
 
 const tabs = [
   { id: 'general', label: 'Informations générales', icon: Building2 },
-  { id: 'financial', label: 'Conditions financières', icon: Banknote },
-  { id: 'validity', label: 'Validité & SLA', icon: CalendarDays },
+  { id: 'equipment', label: 'Équipements couverts', icon: ListChecks },
+  { id: 'financial', label: 'Modalités & visites', icon: Banknote },
   { id: 'clauses', label: 'Clauses juridiques', icon: FileText },
 ]
 
@@ -98,6 +94,9 @@ export default function ContractForm({
   contract,
   currency = 'MAD',
   error,
+  numberPreview = '',
+  numberPreviewError = '',
+  numberPreviewLoading = false,
   onCancel,
   onChange,
   onSubmit,
@@ -108,9 +107,12 @@ export default function ContractForm({
   const setField = (name, value) => onChange((current) => ({ ...current, [name]: value }))
   const selectedClient = clients.find((client) => client.id === contract.clientId)
   const elevators = Array.isArray(selectedClient?.elevators) ? selectedClient.elevators : []
-  const selectedElevator = elevators.find((elevator, index) =>
-    getElevatorId(elevator, index) === contract.elevatorId,
-  )
+  const selectedElevatorIds = Array.isArray(contract.elevatorIds) && contract.elevatorIds.length > 0
+    ? contract.elevatorIds.map(String)
+    : contract.elevatorId ? [String(contract.elevatorId)] : []
+  const selectedElevators = elevators
+    .map((elevator, index) => ({ elevator, id: getElevatorId(elevator, index) }))
+    .filter(({ id }) => selectedElevatorIds.includes(id))
   const amounts = calculateContractAmounts(contract.priceHT, Number(contract.taxRate))
   const amendments = Array.isArray(contract.amendments) ? contract.amendments : []
 
@@ -134,14 +136,6 @@ export default function ContractForm({
     }))
   }
 
-  const changeVersion = (version) => {
-    onChange((current) => ({
-      ...current,
-      version,
-      clauses: getDefaultClauses(current.type, version),
-    }))
-  }
-
   const changeClient = (clientId) => {
     const client = clients.find((item) => item.id === clientId)
     onChange((current) => ({
@@ -160,24 +154,12 @@ export default function ContractForm({
     }))
   }
 
-  const changeElevator = (elevatorId) => {
-    const elevator = elevators.find((item, index) => getElevatorId(item, index) === elevatorId)
-    const elevatorData = elevator
-      ? [{
-          id: elevatorId,
-          reference: elevator.reference || '',
-          brand: elevator.brand || '',
-          type: elevator.type || '',
-        }]
-      : []
+  const toggleElevator = (elevatorId) => {
     onChange((current) => ({
       ...current,
-      elevatorId: elevator ? elevatorId : '',
-      elevatorReference: elevator?.reference || '',
-      elevatorBrand: elevator?.brand || '',
-      elevatorType: elevator?.type || '',
-      elevators: elevatorData,
-      elevatorIds: elevator ? [elevatorId] : [],
+      elevatorIds: selectedElevatorIds.includes(elevatorId)
+        ? selectedElevatorIds.filter((id) => id !== elevatorId)
+        : [...selectedElevatorIds, elevatorId],
     }))
   }
 
@@ -283,14 +265,19 @@ export default function ContractForm({
 
               {activeTab === 'general' && (
                 <div className="grid gap-4 md:grid-cols-2">
-                  <Field label="Référence du contrat" required>
+                  <Field
+                    hint={numberPreviewError
+                      ? `Aperçu indisponible : ${numberPreviewError}. Le numéro sera attribué à l’enregistrement.`
+                      : numberPreviewLoading
+                        ? 'Attribution du prochain numéro…'
+                        : 'Numéro séquentiel attribué à l’enregistrement.'}
+                    label="N° de contrat"
+                    required
+                  >
                     <input
-                      autoComplete="off"
                       className={inputClass}
-                      maxLength={60}
-                      onChange={(event) => setField('reference', event.target.value)}
-                      required
-                      value={contract.reference || ''}
+                      readOnly
+                      value={contract.reference || numberPreview || 'CT-AAAA-001'}
                     />
                   </Field>
                   <Field label="Type de contrat" required>
@@ -302,18 +289,6 @@ export default function ContractForm({
                     >
                       {contractTypes.map((type) => (
                         <option key={type.value} value={type.value}>{type.label}</option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field label="Version du document" required>
-                    <select
-                      className={inputClass}
-                      onChange={(event) => changeVersion(event.target.value)}
-                      required
-                      value={contract.version}
-                    >
-                      {contractVersions.map((version) => (
-                        <option key={version.value} value={version.value}>{version.label}</option>
                       ))}
                     </select>
                   </Field>
@@ -347,40 +322,24 @@ export default function ContractForm({
                       </span>
                     )}
                   </Field>
-                  <Field
-                    hint={selectedClient && elevators.length === 0
-                      ? 'Le parc de ce client est vide. Enregistrez son ascenseur dans sa fiche avant de créer le contrat.'
-                      : selectedClient
-                        ? `${elevators.length} équipement${elevators.length === 1 ? '' : 's'} dans le parc de ce client.`
-                        : 'La liste est strictement limitée au parc du client sélectionné.'}
-                    label="Ascenseur concerné"
-                    required
-                  >
-                    <select
+                  <Field label="Date d’effet" required>
+                    <input
                       className={inputClass}
-                      disabled={!selectedClient || elevators.length === 0}
-                      onChange={(event) => changeElevator(event.target.value)}
+                      onChange={(event) => setField('startDate', event.target.value)}
                       required
-                      value={selectedElevator ? contract.elevatorId : ''}
-                    >
-                      <option value="">
-                        {!selectedClient
-                          ? 'Sélectionnez un client d’abord'
-                          : elevators.length === 0
-                            ? 'Aucun ascenseur enregistré'
-                            : 'Sélectionner un ascenseur'}
-                      </option>
-                      {elevators.map((elevator, index) => (
-                        <option key={getElevatorId(elevator, index)} value={getElevatorId(elevator, index)}>
-                          {getElevatorLabel(elevator)}
-                        </option>
-                      ))}
-                    </select>
-                    {selectedClient && elevators.length === 0 && (
-                      <Link className="mt-2 inline-flex text-xs font-semibold text-blue-800 hover:text-blue-950" to="/clients">
-                        Ouvrir le module Clients pour ajouter l’équipement
-                      </Link>
-                    )}
+                      type="date"
+                      value={contract.startDate || ''}
+                    />
+                  </Field>
+                  <Field label="Date d’échéance" required>
+                    <input
+                      className={inputClass}
+                      min={contract.startDate || undefined}
+                      onChange={(event) => setField('endDate', event.target.value)}
+                      required
+                      type="date"
+                      value={contract.endDate || ''}
+                    />
                   </Field>
                   <Field className="md:col-span-2" label="Objet du contrat" required>
                     <input
@@ -412,17 +371,92 @@ export default function ContractForm({
                     <div className="md:col-span-2 flex flex-wrap gap-x-5 gap-y-2 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-xs text-blue-950">
                       <span><strong>Client :</strong> {getClientName(selectedClient)}</span>
                       {selectedClient.ice && <span><strong>ICE :</strong> {selectedClient.ice}</span>}
-                      {selectedElevator && (
-                        <span><strong>Équipement :</strong> {getElevatorLabel(selectedElevator)}</span>
-                      )}
+                      <span><strong>Équipements couverts :</strong> {selectedElevators.length}</span>
                     </div>
                   )}
                 </div>
               )}
 
+              {activeTab === 'equipment' && (
+                <section className="space-y-4">
+                  <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-4 text-sm leading-6 text-blue-950">
+                    Sélectionnez les équipements couverts. La liste provient exclusivement du parc du client choisi.
+                  </div>
+                  {!selectedClient ? (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
+                      Sélectionnez d’abord un client dans les informations générales.
+                    </div>
+                  ) : elevators.length === 0 ? (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+                      Aucun ascenseur n’est enregistré pour ce client.{' '}
+                      <Link className="font-semibold underline" to="/clients">Ajouter un équipement</Link>
+                    </div>
+                  ) : (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {elevators.map((elevator, index) => {
+                        const elevatorId = getElevatorId(elevator, index)
+                        const checked = selectedElevatorIds.includes(elevatorId)
+                        return (
+                          <label
+                            className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition ${
+                              checked ? 'border-blue-300 bg-blue-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'
+                            }`}
+                            key={elevatorId}
+                          >
+                            <input
+                              checked={checked}
+                              className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-800 focus:ring-blue-500"
+                              onChange={() => toggleElevator(elevatorId)}
+                              type="checkbox"
+                            />
+                            <span className="min-w-0">
+                              <span className="block text-sm font-semibold text-slate-900">
+                                {getElevatorLabel(elevator)}
+                              </span>
+                              <span className="mt-1 block text-xs text-slate-500">
+                                {[elevator.levels && `${elevator.levels} niveaux`, elevator.status]
+                                  .filter(Boolean)
+                                  .join(' · ') || 'Équipement du parc client'}
+                              </span>
+                            </span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
+                  <p className="text-xs text-slate-500">
+                    {selectedElevatorIds.length} équipement{selectedElevatorIds.length === 1 ? '' : 's'} sélectionné{selectedElevatorIds.length === 1 ? '' : 's'}.
+                  </p>
+                </section>
+              )}
+
               {activeTab === 'financial' && (
                 <div className="space-y-5">
                   <div className="grid gap-4 md:grid-cols-2">
+                    <Field label="Fréquence des visites" required>
+                      <select
+                        className={inputClass}
+                        onChange={(event) => setField('visitFrequency', event.target.value)}
+                        required
+                        value={contract.visitFrequency || 'Trimestrielle'}
+                      >
+                        {visitFrequencies.map((frequency) => (
+                          <option key={frequency} value={frequency}>{frequency}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Échéancier de facturation" required>
+                      <select
+                        className={inputClass}
+                        onChange={(event) => setField('billingFrequency', event.target.value)}
+                        required
+                        value={contract.billingFrequency}
+                      >
+                        {billingFrequencies.map((frequency) => (
+                          <option key={frequency} value={frequency}>{frequency}</option>
+                        ))}
+                      </select>
+                    </Field>
                     <Field label="Montant total HT" required>
                       <div className="relative">
                         <input
@@ -452,18 +486,6 @@ export default function ContractForm({
                         ))}
                       </select>
                     </Field>
-                    <Field label="Échéancier de facturation" required>
-                      <select
-                        className={inputClass}
-                        onChange={(event) => setField('billingFrequency', event.target.value)}
-                        required
-                        value={contract.billingFrequency}
-                      >
-                        {billingFrequencies.map((frequency) => (
-                          <option key={frequency} value={frequency}>{frequency}</option>
-                        ))}
-                      </select>
-                    </Field>
                     <Field label="Modalités de règlement" required>
                       <textarea
                         className={`${inputClass} min-h-24 resize-y`}
@@ -472,6 +494,66 @@ export default function ContractForm({
                         value={contract.paymentTerms || ''}
                       />
                     </Field>
+                    <Field label="Délai SLA garanti" required>
+                      <select
+                        className={inputClass}
+                        onChange={(event) => setField('slaResponseTime', event.target.value)}
+                        required
+                        value={contract.slaResponseTime}
+                      >
+                        {slaOptions.map((option) => (
+                          <option key={option} value={option}>Sous {option}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Durée de garantie">
+                      <input
+                        className={inputClass}
+                        onChange={(event) => setField('warranty', event.target.value)}
+                        placeholder="Ex. 12 mois"
+                        value={contract.warranty || ''}
+                      />
+                    </Field>
+                    <Field label="État du contrat" required>
+                      <select
+                        className={inputClass}
+                        onChange={(event) => setField('status', event.target.value)}
+                        required
+                        value={contract.status}
+                      >
+                        {['Brouillon', 'En négociation', 'À signer', 'Actif', 'Terminé', 'Résilié'].map((status) => (
+                          <option key={status} value={status}>{status}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field
+                      hint="De 0 à 24 mois avant l’échéance."
+                      label="Préavis avant échéance (mois)"
+                      required
+                    >
+                      <input
+                        className={inputClass}
+                        max="24"
+                        min="0"
+                        onChange={(event) => setField('noticeMonths', event.target.value)}
+                        required
+                        step="1"
+                        type="number"
+                        value={contract.noticeMonths}
+                      />
+                    </Field>
+                    <label className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3.5 md:col-span-2">
+                      <span>
+                        <span className="block text-sm font-semibold text-slate-800">Tacite reconduction</span>
+                        <span className="mt-1 block text-xs text-slate-500">Renouveler automatiquement à l’échéance.</span>
+                      </span>
+                      <input
+                        checked={contract.autoRenewal === true}
+                        className="h-5 w-5 rounded border-slate-300 text-blue-800 focus:ring-blue-500"
+                        onChange={(event) => setField('autoRenewal', event.target.checked)}
+                        type="checkbox"
+                      />
+                    </label>
                   </div>
 
                   <section aria-label="Récapitulatif financier" className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 to-white p-4 shadow-inner shadow-blue-900/[0.03]">
@@ -506,102 +588,11 @@ export default function ContractForm({
                 </div>
               )}
 
-              {activeTab === 'validity' && (
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Field label="Date de début" required>
-                    <input
-                      className={inputClass}
-                      onChange={(event) => setField('startDate', event.target.value)}
-                      required
-                      type="date"
-                      value={contract.startDate || ''}
-                    />
-                  </Field>
-                  <Field label="Date d’échéance" required>
-                    <input
-                      className={inputClass}
-                      min={contract.startDate || undefined}
-                      onChange={(event) => setField('endDate', event.target.value)}
-                      required
-                      type="date"
-                      value={contract.endDate || ''}
-                    />
-                  </Field>
-                  <Field label="SLA · délai d’intervention garanti" required>
-                    <select
-                      className={inputClass}
-                      onChange={(event) => setField('slaResponseTime', event.target.value)}
-                      required
-                      value={contract.slaResponseTime}
-                    >
-                      {slaOptions.map((option) => (
-                        <option key={option} value={option}>Sous {option}</option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field label="Durée de garantie">
-                    <input
-                      className={inputClass}
-                      onChange={(event) => setField('warranty', event.target.value)}
-                      placeholder="Ex. 12 mois"
-                      value={contract.warranty || ''}
-                    />
-                  </Field>
-                  <label className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3.5 md:col-span-2">
-                    <span>
-                      <span className="block text-sm font-semibold text-slate-800">Tacite reconduction</span>
-                      <span className="mt-1 block text-xs text-slate-500">Renouveler automatiquement à l’échéance.</span>
-                    </span>
-                    <input
-                      checked={contract.autoRenewal === true}
-                      className="h-5 w-5 rounded border-slate-300 text-blue-800 focus:ring-blue-500"
-                      onChange={(event) => setField('autoRenewal', event.target.checked)}
-                      type="checkbox"
-                    />
-                  </label>
-                  <Field
-                    hint="De 0 à 24 mois avant l’échéance."
-                    label="Préavis avant échéance (mois)"
-                    required
-                  >
-                    <input
-                      className={inputClass}
-                      max="24"
-                      min="0"
-                      onChange={(event) => setField('noticeMonths', event.target.value)}
-                      required
-                      step="1"
-                      type="number"
-                      value={contract.noticeMonths}
-                    />
-                  </Field>
-                  <Field label="État du contrat" required>
-                    <select
-                      className={inputClass}
-                      onChange={(event) => setField('status', event.target.value)}
-                      required
-                      value={contract.status}
-                    >
-                      {['Brouillon', 'À signer', 'Actif', 'Terminé', 'Résilié'].map((status) => (
-                        <option key={status} value={status}>{status}</option>
-                      ))}
-                    </select>
-                  </Field>
-                  <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 p-4 text-xs leading-5 text-amber-950 md:col-span-2">
-                    <Wrench aria-hidden="true" className="mt-0.5 shrink-0 text-amber-700" size={16} />
-                    <p>
-                      Le délai SLA constitue l’engagement de prise en charge indiqué aux conditions particulières.
-                      Les contraintes d’accès, de sécurité et d’approvisionnement restent à préciser dans les clauses.
-                    </p>
-                  </div>
-                </div>
-              )}
-
               {activeTab === 'clauses' && (
                 <div className="space-y-5">
                   <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-4 text-xs leading-5 text-blue-950">
-                    Le modèle est prérempli selon le type et la version du contrat. Vous pouvez l’adapter avant
-                    l’enregistrement ; un changement de type ou de version recharge le modèle correspondant.
+                    Le modèle juridique est prérempli selon le type de contrat. Vous pouvez l’adapter avant
+                    l’enregistrement ; un changement de type recharge les clauses correspondantes.
                   </div>
                   <Field label="Clauses contractuelles" required>
                     <textarea

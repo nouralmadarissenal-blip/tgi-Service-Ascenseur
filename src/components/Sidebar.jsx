@@ -1,11 +1,15 @@
 import {
   Boxes,
+  Building2,
   ClipboardList,
   FileCheck2,
   FileText,
   LayoutDashboard,
   LogOut,
+  Package,
+  ReceiptText,
   Settings,
+  ShoppingCart,
   Users,
   UserRound,
   WalletCards,
@@ -19,9 +23,14 @@ const navigation = [
   { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
   { label: 'Mon profil', to: '/profile', icon: UserRound },
   { label: 'Clients', to: '/clients', icon: Users, allowedRoles: ['Commercial'] },
+  { label: 'Parc d’Ascenseurs', to: '/park', icon: Building2, allowedRoles: ['Directeur', 'Commercial'] },
   { label: 'Techniciens', to: '/technicians', icon: Wrench, allowedRoles: ['Directeur'] },
   { label: 'Interventions', to: '/interventions', icon: ClipboardList, allowedRoles: ['Directeur'] },
   { label: 'Stock', to: '/stock', icon: Boxes, allowedRoles: ['Directeur'] },
+  { label: 'Bons de Commande', to: '/purchase-orders', icon: ShoppingCart, allowedRoles: ['Directeur'] },
+  { label: 'Bons de Livraison', to: '/delivery-notes', icon: Package, allowedRoles: ['Directeur'] },
+  { label: 'Devis', to: '/quotes', icon: ReceiptText, allowedRoles: ['Directeur', 'Commercial'] },
+  { label: 'Factures', to: '/invoices', icon: ReceiptText, allowedRoles: ['Directeur', 'Commercial'] },
   { label: 'Ventes', to: '/sales', icon: FileText, allowedRoles: ['Directeur', 'Commercial'] },
   { label: 'Contrats', to: '/contracts', icon: FileCheck2, allowedRoles: ['Directeur', 'Commercial'] },
   { label: 'Recouvrement', to: '/collections', icon: WalletCards, allowedRoles: ['Directeur', 'Commercial'] },
@@ -88,14 +97,14 @@ export default function Sidebar({
 
       <div className="shrink-0 border-t border-slate-700/50 p-4">
         <div className="mb-3 flex min-w-0 items-center gap-3 px-1">
-          <UserAvatar className="border-white/15" email={user?.email} name={displayName} size="sm" />
+          <UserAvatar className="border-white/15" email={user?.email} name={displayName} role={role} size="sm" />
           <div className="min-w-0">
             <p className="truncate text-xs font-semibold text-white">{displayName}</p>
             <p className="mt-1 truncate text-[11px] text-slate-400">{role} · {user?.email}</p>
           </div>
         </div>
         {logoutError && <p className="mb-2 text-xs text-red-300" role="alert">{logoutError}</p>}
-        {['SuperAdmin', 'Directeur', 'Commercial'].includes(role) && (
+        {['SuperAdmin', 'Directeur'].includes(role) && (
           <NavLink
             className={({ isActive }) =>
               `mb-1 flex items-center gap-3 rounded-xl border px-3 py-2.5 text-[13px] font-medium transition ${

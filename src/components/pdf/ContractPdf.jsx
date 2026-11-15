@@ -24,8 +24,26 @@ const ContractPdf = forwardRef(function ContractPdf({ client, company, contract 
     ? 'CONTRAT D’INSTALLATION'
     : ['modernisation', 'modernization'].includes(contract.type)
       ? 'CONTRAT DE MODERNISATION'
-      : 'CONTRAT DE MAINTENANCE'
-  const version = contract.version === 'complete' ? 'VERSION COMPLÈTE' : 'VERSION SIMPLE'
+      : ['maintenance_complete', 'complete'].includes(contract.type)
+        ? 'CONTRAT DE MAINTENANCE COMPLÈTE'
+        : 'CONTRAT DE MAINTENANCE PRÉVENTIVE'
+  const elevators = Array.isArray(contract.elevators) && contract.elevators.length > 0
+    ? contract.elevators
+    : contract.elevatorReference
+      ? [{
+          reference: contract.elevatorReference,
+          brand: contract.elevatorBrand,
+          type: contract.elevatorType,
+        }]
+      : []
+  const elevatorSummary = elevators.length > 0
+    ? elevators.map((elevator, index) => [
+        `${index + 1}. ${elevator.reference || 'Ascenseur'}`,
+        [elevator.brand, elevator.type, (elevator.levels || elevator.floors) && `${elevator.levels || elevator.floors} niveaux`]
+          .filter(Boolean)
+          .join(' · '),
+      ].filter(Boolean).join(' — ')).join('\n')
+    : 'Aucun équipement renseigné'
   const rawTaxRate = Number(contract.taxRate)
   const taxRate = Number.isFinite(rawTaxRate) && rawTaxRate >= 0 && rawTaxRate <= 100
     ? rawTaxRate
@@ -63,9 +81,6 @@ const ContractPdf = forwardRef(function ContractPdf({ client, company, contract 
         <h1 style={{ margin: '0', color: '#0f172a', fontSize: '19pt', lineHeight: 1.3 }}>
           {contractType}
         </h1>
-        <p style={{ margin: '2mm 0 0', color: '#64748b', fontSize: '9pt', fontWeight: 600 }}>
-          {version}
-        </p>
       </section>
 
       <section
@@ -94,6 +109,8 @@ const ContractPdf = forwardRef(function ContractPdf({ client, company, contract 
           {company.ice && <div>ICE : {company.ice}</div>}
           {company.rc && <div>RC : {company.rc}</div>}
           {company.if && <div>IF : {company.if}</div>}
+          {company.patente && <div>Patente : {company.patente}</div>}
+          {company.capital && <div>Capital : {company.capital}</div>}
         </div>
         <div style={{ padding: '5mm', border: '1px solid #dbe3ef', borderRadius: '3mm' }}>
           <p style={{ margin: '0 0 2mm', color: '#1e3a8a', fontSize: '8pt', fontWeight: 700, letterSpacing: '1px' }}>
@@ -104,6 +121,8 @@ const ContractPdf = forwardRef(function ContractPdf({ client, company, contract 
             <div>{client.address || contract.clientAddress}{client.city ? `, ${client.city}` : ''}</div>
           )}
           {(client.ice || contract.clientIce) && <div>ICE : {client.ice || contract.clientIce}</div>}
+          {client.rc && <div>RC : {client.rc}</div>}
+          {client.if && <div>IF : {client.if}</div>}
           {client.phone && <div>Tél. : {client.phone}</div>}
           {client.email && <div>{client.email}</div>}
         </div>
@@ -111,27 +130,15 @@ const ContractPdf = forwardRef(function ContractPdf({ client, company, contract 
 
       <section style={{ marginBottom: '7mm', pageBreakInside: 'avoid', breakInside: 'avoid' }}>
         <h2 style={{ margin: '0 0 3mm', color: '#0f172a', fontSize: '11pt' }}>
-          Conditions particulières
+          Article 1 — Objet du contrat et équipements couverts
         </h2>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '8.5pt' }}>
           <tbody>
             {[
-              ['Objet / équipement', contract.subject],
-              ['Ascenseur concerné', contract.elevatorReference || '—'],
-              ['Marque / type', [contract.elevatorBrand, contract.elevatorType].filter(Boolean).join(' · ') || '—'],
-              ['Site d’exécution', contract.siteAddress || client.address || '—'],
-              ['Date de début', formatDate(contract.startDate)],
-              ['Date de fin', formatDate(contract.endDate)],
+              ['Objet du contrat', contract.subject],
+              ['Adresse du site', contract.siteAddress || client.address || '—'],
+              ['Équipements couverts', elevatorSummary],
               ['Périmètre', contract.scope],
-              ['Durée de garantie', contract.warranty || '—'],
-              ['Délai de prise en charge', contract.responseTime || '—'],
-              ['SLA garanti', contract.slaResponseTime || contract.responseTime || '—'],
-              ['Échéancier de facturation', contract.billingFrequency || '—'],
-              ['Reconduction tacite', contract.autoRenewal ? 'Oui' : 'Non'],
-              ...(contract.autoRenewal
-                ? [['Préavis de renouvellement', `${Number(contract.noticeMonths) || 0} mois avant échéance`]]
-                : []),
-              ['Règlement', contract.paymentTerms || 'Selon facture'],
             ].map(([label, value]) => (
               <tr key={label} style={{ borderBottom: '1px solid #e2e8f0' }}>
                 <th style={{ width: '37%', padding: '2.5mm 3mm', background: '#f8fafc', color: '#475569', textAlign: 'left', verticalAlign: 'top' }}>
@@ -148,10 +155,47 @@ const ContractPdf = forwardRef(function ContractPdf({ client, company, contract 
 
       <section style={{ marginBottom: '7mm', pageBreakInside: 'avoid', breakInside: 'avoid' }}>
         <h2 style={{ margin: '0 0 3mm', color: '#0f172a', fontSize: '11pt' }}>
-          Conditions financières
+          Article 2 — Durée
         </h2>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '8.5pt' }}>
           <tbody>
+            {[
+              ['Date d’effet', formatDate(contract.startDate)],
+              ['Date d’échéance', formatDate(contract.endDate)],
+              ['Reconduction tacite', contract.autoRenewal ? 'Oui' : 'Non'],
+              ...(contract.autoRenewal
+                ? [['Préavis de renouvellement', `${Number(contract.noticeMonths) || 0} mois avant échéance`]]
+                : []),
+            ].map(([label, value]) => (
+              <tr key={label} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                <th style={{ width: '37%', padding: '2.5mm 3mm', background: '#f8fafc', color: '#475569', textAlign: 'left', verticalAlign: 'top' }}>
+                  {label}
+                </th>
+                <td style={{ padding: '2.5mm 3mm', verticalAlign: 'top' }}>{value || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section style={{ marginBottom: '7mm', pageBreakInside: 'avoid', breakInside: 'avoid' }}>
+        <h2 style={{ margin: '0 0 3mm', color: '#0f172a', fontSize: '11pt' }}>
+          Article 3 — Conditions financières et visites
+        </h2>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '8.5pt' }}>
+          <tbody>
+            {[
+              ['Fréquence des visites', contract.visitFrequency || '—'],
+              ['Échéancier de facturation', contract.billingFrequency || '—'],
+              ['Délai de prise en charge', contract.slaResponseTime || contract.responseTime || '—'],
+              ['Durée de garantie', contract.warranty || '—'],
+              ['Modalités de paiement', contract.paymentTerms || 'Selon facture'],
+            ].map(([label, value]) => (
+              <tr key={label} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                <th style={{ padding: '2.5mm 3mm', background: '#f8fafc', color: '#475569', textAlign: 'left' }}>{label}</th>
+                <td style={{ padding: '2.5mm 3mm', whiteSpace: 'pre-wrap' }}>{value}</td>
+              </tr>
+            ))}
             <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
               <th style={{ padding: '2.5mm 3mm', background: '#f8fafc', color: '#475569', textAlign: 'left' }}>Montant HT</th>
               <td style={{ padding: '2.5mm 3mm', textAlign: 'right' }}>{formatCurrency(priceHT, company.defaultCurrency)}</td>
@@ -174,7 +218,7 @@ const ContractPdf = forwardRef(function ContractPdf({ client, company, contract 
 
       <section>
         <h2 style={{ margin: '0 0 4mm', color: '#0f172a', fontSize: '11pt' }}>
-          Clauses contractuelles
+          Article 4 — Clauses générales
         </h2>
         {clauses.map((clause, index) => (
           <p
@@ -274,7 +318,7 @@ const ContractPdf = forwardRef(function ContractPdf({ client, company, contract 
           Fait en deux exemplaires. Les parties reconnaissent avoir pris connaissance des conditions particulières et des clauses ci-dessus, sous réserve des vérifications et validations requises avant signature.
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12mm', marginTop: 'auto' }}>
-          {['Pour TGI Ascenseurs', 'Pour le Client'].map((signatory) => (
+          {['Pour TGI Ascenseurs', 'Pour le Client (Lu et approuvé)'].map((signatory) => (
             <div
               key={signatory}
               data-pdf-stamp-slot={signatory === 'Pour TGI Ascenseurs' ? 'true' : undefined}
@@ -291,7 +335,7 @@ const ContractPdf = forwardRef(function ContractPdf({ client, company, contract 
             >
               <strong style={{ color: '#1e3a8a' }}>{signatory}</strong>
               <p style={{ margin: '7mm 0 0', color: '#334155', fontSize: '8.5pt', fontWeight: 600 }}>
-                Lu et approuvé, bon pour accord
+                {signatory === 'Pour TGI Ascenseurs' ? 'Lu et approuvé, bon pour accord' : 'Lu et approuvé'}
               </p>
               <p style={{ margin: '2mm 0 0', color: '#64748b', fontSize: '8pt' }}>
                 Nom, qualité, date, signature et cachet

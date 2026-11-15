@@ -81,6 +81,11 @@ const SalesPdf = forwardRef(function SalesPdf({ client = {}, company = {}, docum
               {documentData.type === 'quote' ? 'Devis valable jusqu’au' : 'Date d’échéance'} : {formatDate(documentData.dueDate)}
             </p>
           )}
+          {documentData.type === 'invoice' && documentData.linkedDocumentNumber && (
+            <p style={{ margin: '1mm 0 0', color: '#64748b', fontSize: '8.5pt' }}>
+              Référence : {documentData.linkedDocumentType || 'Document lié'} · {documentData.linkedDocumentNumber}
+            </p>
+          )}
         </div>
         <section style={{ boxSizing: 'border-box', flex: '0 1 78mm', padding: '4mm 4.5mm', border: '1px solid #cbd5e1', borderRadius: '2mm', pageBreakInside: 'avoid', breakInside: 'avoid' }}>
           <p style={{ margin: '0 0 2mm', color: '#1e3a8a', fontSize: '7.5pt', fontWeight: 700, letterSpacing: '1px' }}>
@@ -208,9 +213,14 @@ const SalesPdf = forwardRef(function SalesPdf({ client = {}, company = {}, docum
       )}
 
       {documentData.type === 'invoice' && (
-        <p style={{ margin: '7mm 0 0', paddingTop: '3mm', borderTop: '1px solid #e2e8f0', color: '#475569', fontSize: '8pt' }}>
-          Arrêtée la présente facture à la somme de : <strong>{formatCurrency(documentData.totalTTC, company.defaultCurrency)}</strong> TTC.
-        </p>
+        <section style={{ marginTop: '7mm', paddingTop: '3mm', borderTop: '1px solid #e2e8f0', color: '#475569', fontSize: '8pt' }}>
+          <p style={{ margin: '0 0 2mm' }}>
+            Arrêtée la présente facture à la somme de : <strong>{formatCurrency(documentData.totalTTC, company.defaultCurrency)}</strong> TTC.
+          </p>
+          {documentData.paymentTerms && (
+            <p style={{ margin: 0 }}>Conditions de règlement : <strong>{documentData.paymentTerms}</strong></p>
+          )}
+        </section>
       )}
 
       {(companyDetails.length > 0 || bankDetails.length > 0) && (
@@ -237,6 +247,13 @@ const SalesPdf = forwardRef(function SalesPdf({ client = {}, company = {}, docum
         >
           <strong style={{ color: '#1e3a8a', fontSize: '9pt' }}>TGI ASCENSEURS</strong>
           <p style={{ margin: '2mm 0 0', color: '#64748b', fontSize: '8pt' }}>Signature et cachet</p>
+          {documentData.type === 'invoice' && company.stampBase64 && company.autoStampEnabled !== true && (
+            <img
+              alt="Cachet et signature de l’entreprise"
+              src={company.stampBase64}
+              style={{ display: 'block', maxWidth: '40mm', maxHeight: '20mm', objectFit: 'contain', margin: '2mm auto 0' }}
+            />
+          )}
         </div>
       </section>
     </article>

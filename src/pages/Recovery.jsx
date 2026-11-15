@@ -116,6 +116,7 @@ export default function Recovery() {
   const [searchParams] = useSearchParams()
   const invoiceFromQuery = searchParams.get('invoice')
   const { data: currentSales, loading: currentSalesLoading, error: currentSalesError } = useFirestoreCollection('sales')
+  const { data: dedicatedInvoices, loading: dedicatedInvoicesLoading, error: dedicatedInvoicesError } = useFirestoreCollection('invoices')
   const { data: payments, error: paymentsError } = useFirestoreCollection('payments')
   const { data: clients, error: clientsError } = useFirestoreCollection('clients')
   const { data: reminders, error: remindersError } = useFirestoreCollection('recoveryReminders')
@@ -145,8 +146,8 @@ export default function Recovery() {
     result: '',
   })
   const receiptRef = useRef(null)
-  const loading = currentSalesLoading
-  const documentsError = currentSalesError
+  const loading = currentSalesLoading || dedicatedInvoicesLoading
+  const documentsError = currentSalesError || dedicatedInvoicesError
 
   useEffect(() => {
     return onSnapshot(
@@ -160,12 +161,23 @@ export default function Recovery() {
     () => new Map(clients.map((client) => [client.id, client])),
     [clients],
   )
-  const invoices = useMemo(
-    () => currentSales
-      .filter((documentData) => documentData.type === 'invoice' && getRemainingAmount(documentData) > 0)
+  const invoices = useMemo(() => [
+    ...currentSales
+      .filter((documentData) =>
+        documentData.type === 'invoice' &&
+        !['brouillon', 'draft', 'annulé', 'annule', 'annulée', 'annulee', 'cancelled', 'canceled']
+          .includes(String(documentData.status || '').trim().toLocaleLowerCase('fr')) &&
+        getRemainingAmount(documentData) > 0,
+      )
       .map((documentData) => ({ ...documentData, sourceCollection: 'sales' })),
-    [currentSales],
-  )
+    ...dedicatedInvoices
+      .filter((invoice) =>
+        !['brouillon', 'draft', 'annulé', 'annule', 'annulée', 'annulee', 'cancelled', 'canceled']
+          .includes(String(invoice.status || '').trim().toLocaleLowerCase('fr')) &&
+        getRemainingAmount(invoice) > 0,
+      )
+      .map((invoice) => ({ ...invoice, sourceCollection: 'invoices' })),
+  ], [currentSales, dedicatedInvoices])
   const filteredInvoices = useMemo(() => {
     const search = invoiceQuery.trim().toLowerCase()
     return invoices.filter((invoice) =>
@@ -211,12 +223,15 @@ export default function Recovery() {
   const invoicePayments = payments
     .filter((payment) =>
       payment.invoiceId === activeInvoiceId &&
-      payment.invoiceCollection === 'sales',
+      (payment.invoiceCollection || 'sales') === (selectedInvoice?.sourceCollection || 'sales'),
     )
     .sort((first, second) => (second.createdAt?.seconds || 0) - (first.createdAt?.seconds || 0))
   const paymentTable = useDataTable(invoicePayments)
   const invoiceReminders = reminders
-    .filter((reminder) => reminder.invoiceId === activeInvoiceId && reminder.invoiceCollection === 'sales')
+    .filter((reminder) =>
+      reminder.invoiceId === activeInvoiceId &&
+      (reminder.invoiceCollection || 'sales') === (selectedInvoice?.sourceCollection || 'sales'),
+    )
     .sort((first, second) => String(second.date || '').localeCompare(String(first.date || '')))
 
   useEffect(() => {
@@ -266,7 +281,10 @@ export default function Recovery() {
 
     setSaving(true)
     try {
-      const invoiceRef = doc(db, 'sales', activeInvoiceId)
+      const invoiceCollection = ['invoices', 'sales'].includes(selectedInvoice.sourceCollection)
+        ? selectedInvoice.sourceCollection
+        : 'sales'
+      const invoiceRef = doc(db, invoiceCollection, activeInvoiceId)
       const paymentRef = doc(collection(db, 'payments'))
       const payment = await runTransaction(db, async (transaction) => {
         const invoiceSnapshot = await transaction.get(invoiceRef)
@@ -276,6 +294,10 @@ export default function Recovery() {
         const invoice = invoiceSnapshot.data()
         if (invoice.type !== 'invoice') {
           throw new Error('Le règlement ne peut être rattaché qu’à une facture.')
+        }
+        if (['brouillon', 'draft', 'annulé', 'annule', 'annulée', 'annulee', 'cancelled', 'canceled']
+          .includes(String(invoice.status || '').trim().toLocaleLowerCase('fr'))) {
+          throw new Error('Un brouillon ou une facture annulée ne peut pas recevoir de règlement.')
         }
         const totalCents = toCents(invoice.totalTTC)
         const paidCents = invoice.paidAmount !== null && invoice.paidAmount !== undefined
@@ -299,7 +321,7 @@ export default function Recovery() {
         const paymentData = {
           reference,
           invoiceId: activeInvoiceId,
-          invoiceCollection: 'sales',
+          invoiceCollection,
           invoiceNumber: invoice.number || '',
           clientId: invoice.clientId || '',
           clientName: invoice.clientName || '',
@@ -364,9 +386,12 @@ export default function Recovery() {
 
     setReminderSaving(true)
     try {
+      const invoiceCollection = ['invoices', 'sales'].includes(selectedInvoice.sourceCollection)
+        ? selectedInvoice.sourceCollection
+        : 'sales'
       await addDoc(collection(db, 'recoveryReminders'), {
         invoiceId: selectedInvoice.id,
-        invoiceCollection: 'sales',
+        invoiceCollection,
         invoiceNumber: selectedInvoice.number || '',
         clientId: selectedInvoice.clientId || '',
         clientName: selectedInvoice.clientName || '',

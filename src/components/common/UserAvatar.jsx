@@ -7,6 +7,8 @@ const sizeClasses = {
   lg: 'h-24 w-24 text-2xl',
 }
 
+const DIRECTOR_EMAIL = 'techniquegi39@gmail.com'
+
 function getInitials(name, email) {
   const source = String(name || email || 'Utilisateur').trim()
   return source
@@ -17,16 +19,20 @@ function getInitials(name, email) {
     .join('')
 }
 
-export default function UserAvatar({ email, name, size = 'md', className = '' }) {
-  const src = getAvatar(email)
+export default function UserAvatar({ email, name, role, size = 'md', className = '' }) {
+  const isDirector =
+    role === 'Directeur' || String(email || '').trim().toLowerCase() === DIRECTOR_EMAIL
+  const src = isDirector ? '/khalid-avatar.jpeg' : getAvatar(email)
   const [failedSrc, setFailedSrc] = useState('')
   const dimensions = sizeClasses[size] || sizeClasses.md
-  const imageClassName = `${dimensions} shrink-0 rounded-full border-2 border-white/30 object-cover shadow-md ring-2 ring-blue-500/35 ${className}`
+  const imageClassName = `${dimensions} shrink-0 rounded-full border-2 ${
+    isDirector ? 'border-blue-500' : 'border-white/30'
+  } object-cover shadow-md ring-2 ring-blue-500/35 ${className}`
 
   if (src && failedSrc !== src) {
     return (
       <img
-        alt={name ? `Photo de ${name}` : 'Photo de profil'}
+        alt={isDirector ? 'Khalid Laassas' : name ? `Photo de ${name}` : 'Photo de profil'}
         className={imageClassName}
         onError={() => setFailedSrc(src)}
         src={encodeURI(src)}

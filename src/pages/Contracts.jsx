@@ -8,6 +8,7 @@ import {
   FileText,
   LoaderCircle,
   Pencil,
+  RefreshCw,
   Search,
   ShieldCheck,
   Trash2,
@@ -37,7 +38,7 @@ import useFirestoreCollection from '../hooks/useFirestoreCollection'
 import { calculateContractAmounts } from '../utils/contractFinancials'
 import { exportRowsToCsv } from '../utils/tableExports'
 
-const CONTRACT_TYPES = ['installation', 'intervention', 'modernisation']
+const CONTRACT_TYPES = ['maintenance_preventive', 'maintenance_complete', 'modernisation', 'installation']
 const BILLING_FREQUENCIES = ['Mensuel', 'Trimestriel', 'Annuel', 'À la livraison']
 const SLA_OPTIONS = ['2h', '4h', '12h', '24h']
 const TAX_RATES = [0, 14, 20]
@@ -45,6 +46,7 @@ const TAX_RATES = [0, 14, 20]
 const statusClass = {
   Brouillon: 'bg-slate-100 text-slate-700',
   'À signer': 'bg-amber-50 text-amber-800',
+  'En négociation': 'bg-orange-50 text-orange-800',
   Actif: 'bg-emerald-50 text-emerald-800',
   Terminé: 'bg-blue-50 text-blue-800',
   Résilié: 'bg-red-50 text-red-800',
@@ -53,27 +55,38 @@ const statusClass = {
   'Préavis de renouvellement': 'bg-amber-100 text-amber-900',
 }
 
-function createContractReference() {
-  const date = new Date()
-  return `TGI-${date.getFullYear()}-${String(Date.now()).slice(-6)}`
-}
-
 function todayAsInputValue() {
   const date = new Date()
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
+function addDaysToInputDate(value, days) {
+  const date = new Date(`${value}T00:00:00`)
+  date.setDate(date.getDate() + days)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function getContractCounterId(year) {
+  return `contract-${year}`
+}
+
 function normalizeContractType(type) {
-  if (type === 'installation') return 'installation'
-  if (type === 'modernisation' || type === 'modernization') return 'modernisation'
-  return 'intervention'
+  const normalized = String(type || '').trim().toLowerCase()
+  if (normalized === 'installation') return 'installation'
+  if (['modernisation', 'modernization'].includes(normalized)) return 'modernisation'
+  if (['maintenance_complete', 'maintenance complète', 'complete'].includes(normalized)) {
+    return 'maintenance_complete'
+  }
+  return 'maintenance_preventive'
 }
 
 function contractTypeLabel(type) {
   const normalizedType = normalizeContractType(type)
   if (normalizedType === 'installation') return 'Installation'
   if (normalizedType === 'modernisation') return 'Modernisation'
-  return 'Maintenance'
+  return normalizedType === 'maintenance_complete'
+    ? 'Maintenance complète'
+    : 'Maintenance préventive'
 }
 
 function normalizeTaxRate(value, fallback = 20) {
@@ -122,8 +135,12 @@ function getContractElevatorLabel(contract, client) {
 }
 
 function getContractStatus(contract) {
-  const status = contract.status || 'Brouillon'
-  const termState = getContractTermState(contract)
+  const status = String(contract.status || 'Brouillon').trim()
+  const normalizedStatus = status.toLocaleLowerCase('fr')
+  if (['résilié', 'resilie'].includes(normalizedStatus)) return 'Résilié'
+  if (['en négociation', 'negotiation', 'négociation'].includes(normalizedStatus)) return 'En négociation'
+  if (status !== 'Actif') return status
+  const termState = getContractTermState({ ...contract, status })
   if (termState === 'expired') return 'Expiré'
   if (termState === 'renewal') return 'Préavis de renouvellement'
   if (termState === 'expiring') return 'Bientôt à terme'
@@ -175,13 +192,14 @@ function safeFilename(value) {
 }
 
 function createEmptyContract(companySettings = {}) {
-  const type = 'intervention'
+  const type = 'maintenance_preventive'
   const version = 'complete'
   const configuredRate = normalizeTaxRate(companySettings.defaultVatRate)
   return {
-    reference: createContractReference(),
+    reference: '',
     type,
     version,
+    visitFrequency: 'Trimestrielle',
     clientId: '',
     clientName: '',
     clientAddress: '',
@@ -192,6 +210,7 @@ function createEmptyContract(companySettings = {}) {
     elevatorType: '',
     elevators: [],
     elevatorIds: [],
+    renewedFromContractId: '',
     subject: '',
     siteAddress: '',
     startDate: todayAsInputValue(),
@@ -230,6 +249,7 @@ export default function Contracts() {
   const [query, setQuery] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [clientFilter, setClientFilter] = useState('')
   const [formOpen, setFormOpen] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [form, setForm] = useState(createEmptyContract)
@@ -240,6 +260,9 @@ export default function Contracts() {
   const [pageError, setPageError] = useState('')
   const [notice, setNotice] = useState('')
   const [companySettings, setCompanySettings] = useState({})
+  const [referencePreview, setReferencePreview] = useState('')
+  const [referencePreviewYear, setReferencePreviewYear] = useState('')
+  const [referencePreviewError, setReferencePreviewError] = useState('')
   const pdfRef = useRef(null)
 
   useEffect(() => onSnapshot(
@@ -257,6 +280,37 @@ export default function Contracts() {
     return () => window.clearTimeout(timer)
   }, [notice])
 
+  useEffect(() => {
+    const year = String(form.startDate || '').slice(0, 4)
+    if (!formOpen || !/^\d{4}$/.test(year) || form.reference) return undefined
+
+    let active = true
+    const loadNextReference = async () => {
+      try {
+        const counterSnapshot = await getDoc(doc(db, 'salesCounters', getContractCounterId(year)))
+        const nextNumber = (Number(counterSnapshot.data()?.lastNumber) || 0) + 1
+        const prefix = String(companySettings.contractPrefix || 'CT').trim().toUpperCase() || 'CT'
+        if (active) {
+          setReferencePreview(`${prefix}-${year}-${String(nextNumber).padStart(3, '0')}`)
+          setReferencePreviewYear(year)
+          setReferencePreviewError('')
+        }
+      } catch (previewError) {
+        if (active) {
+          setReferencePreviewError(
+            previewError instanceof Error ? previewError.message : 'Numérotation indisponible.',
+          )
+          setReferencePreviewYear(year)
+        }
+      }
+    }
+
+    void loadNextReference()
+    return () => {
+      active = false
+    }
+  }, [companySettings.contractPrefix, form.reference, form.startDate, formOpen])
+
   const clientById = useMemo(
     () => new Map(clients.map((client) => [client.id, client])),
     [clients],
@@ -272,6 +326,7 @@ export default function Contracts() {
       __typeLabel: contractTypeLabel(contract.type),
       __typeKey: normalizeContractType(contract.type),
       __contractStatus: getContractStatus(contract),
+      __amountHT: financials.valid ? financials.totalHT : null,
       __amountTTC: financials.valid ? financials.totalTTC : null,
     }
   }), [contracts, clientById])
@@ -291,9 +346,10 @@ export default function Contracts() {
         .some((value) => String(value).toLowerCase().includes(search))
       return matchesSearch &&
         (!typeFilter || contract.__typeKey === typeFilter) &&
-        (!statusFilter || contract.__contractStatus === statusFilter)
+        (!statusFilter || contract.__contractStatus === statusFilter) &&
+        (!clientFilter || contract.clientId === clientFilter)
     })
-  }, [allContracts, query, typeFilter, statusFilter])
+  }, [allContracts, query, typeFilter, statusFilter, clientFilter])
 
   const table = useDataTable(filteredContracts)
   const exportColumns = [
@@ -325,12 +381,16 @@ export default function Contracts() {
     setQuery('')
     setTypeFilter('')
     setStatusFilter('')
+    setClientFilter('')
     table.setPage(1)
   }
 
   const openNew = () => {
     setEditingId(null)
     setForm(createEmptyContract(companySettings))
+    setReferencePreview('')
+    setReferencePreviewYear('')
+    setReferencePreviewError('')
     setFormError('')
     setFormOpen(true)
   }
@@ -340,13 +400,28 @@ export default function Contracts() {
     const version = contract.version === 'simple' ? 'simple' : 'complete'
     const client = clientById.get(contract.clientId)
     const clientElevators = Array.isArray(client?.elevators) ? client.elevators : []
-    const matchingElevator = clientElevators.find((elevator, index) =>
-      getElevatorId(elevator, index) === contract.elevatorId ||
-      Boolean(contract.elevatorReference && elevator.reference === contract.elevatorReference),
-    )
-    const elevatorId = matchingElevator
-      ? getElevatorId(matchingElevator, clientElevators.indexOf(matchingElevator))
-      : ''
+    const savedElevators = Array.isArray(contract.elevators) ? contract.elevators : []
+    const savedElevatorIds = Array.isArray(contract.elevatorIds)
+      ? contract.elevatorIds.map(String)
+      : contract.elevatorId ? [String(contract.elevatorId)] : []
+    const selectedElevators = clientElevators
+      .map((elevator, index) => ({ elevator, id: getElevatorId(elevator, index) }))
+      .filter(({ elevator, id }) =>
+        savedElevatorIds.includes(id) ||
+        savedElevators.some((saved) =>
+          String(saved.id || '') === id ||
+          Boolean(saved.reference && elevator.reference === saved.reference),
+        ) ||
+        Boolean(contract.elevatorReference && elevator.reference === contract.elevatorReference),
+      )
+    const elevatorSnapshots = selectedElevators.map(({ elevator, id }) => ({
+      id,
+      reference: elevator.reference || '',
+      brand: elevator.brand || '',
+      type: elevator.type || '',
+      levels: elevator.levels || elevator.floors || '',
+    }))
+    const elevatorId = selectedElevators[0]?.id || ''
     const defaults = createEmptyContract(companySettings)
     const billingFrequency = normalizeBillingFrequency(contract.billingFrequency, type)
     const rate = normalizeTaxRate(contract.taxRate, Number(defaults.taxRate))
@@ -356,22 +431,15 @@ export default function Contracts() {
       id: contract.id,
       type,
       version,
-      reference: contract.reference || createContractReference(),
+      reference: contract.reference || '',
       clientId: client ? contract.clientId : '',
       clientName: client ? getClientName(client) : contract.clientName || '',
       elevatorId,
-      elevatorReference: matchingElevator?.reference || contract.elevatorReference || '',
-      elevatorBrand: matchingElevator?.brand || contract.elevatorBrand || '',
-      elevatorType: matchingElevator?.type || contract.elevatorType || '',
-      elevators: matchingElevator
-        ? [{
-            id: elevatorId,
-            reference: matchingElevator.reference || '',
-            brand: matchingElevator.brand || '',
-            type: matchingElevator.type || '',
-          }]
-        : [],
-      elevatorIds: elevatorId ? [elevatorId] : [],
+      elevatorReference: elevatorSnapshots[0]?.reference || contract.elevatorReference || '',
+      elevatorBrand: elevatorSnapshots[0]?.brand || contract.elevatorBrand || '',
+      elevatorType: elevatorSnapshots[0]?.type || contract.elevatorType || '',
+      elevators: elevatorSnapshots,
+      elevatorIds: elevatorSnapshots.map((elevator) => elevator.id),
       subject: contract.subject || '',
       siteAddress: contract.siteAddress || client?.address || contract.clientAddress || '',
       priceHT: contract.priceHT == null ? '' : String(contract.priceHT),
@@ -382,6 +450,9 @@ export default function Contracts() {
         ? contract.slaResponseTime
         : SLA_OPTIONS.includes(contract.responseTime) ? contract.responseTime : '24h',
       billingFrequency,
+      visitFrequency: ['Mensuelle', 'Trimestrielle', 'Annuelle'].includes(contract.visitFrequency)
+        ? contract.visitFrequency
+        : 'Trimestrielle',
       autoRenewal: contract.autoRenewal === true,
       noticeMonths: String(contract.noticeMonths ?? 3),
       amendments: Array.isArray(contract.amendments) ? contract.amendments : [],
@@ -392,7 +463,52 @@ export default function Contracts() {
       clauses: contract.clauses || getDefaultClauses(type, version),
     }
     setEditingId(contract.id)
+    setReferencePreview('')
+    setReferencePreviewYear('')
+    setReferencePreviewError('')
     setForm(normalizedContract)
+    setFormError('')
+    setFormOpen(true)
+  }
+
+  const renewContract = (contract) => {
+    const today = todayAsInputValue()
+    const validTerm = isValidInputDate(contract.startDate) &&
+      isValidInputDate(contract.endDate) &&
+      contract.endDate >= contract.startDate
+    const durationDays = validTerm
+      ? Math.max(1, Math.round(
+          (new Date(`${contract.endDate}T00:00:00`) - new Date(`${contract.startDate}T00:00:00`)) /
+            86400000,
+        ))
+      : 364
+    const startDate = validTerm && contract.endDate >= today
+      ? addDaysToInputDate(contract.endDate, 1)
+      : today
+    const endDate = addDaysToInputDate(startDate, durationDays)
+    const defaults = createEmptyContract(companySettings)
+
+    setEditingId(null)
+    setForm({
+      ...defaults,
+      ...contract,
+      id: '',
+      reference: '',
+      startDate,
+      endDate,
+      status: 'En négociation',
+      renewedFromContractId: contract.id,
+      amendments: Array.isArray(contract.amendments) ? [...contract.amendments] : [],
+      priceHT: contract.priceHT == null ? '' : String(contract.priceHT),
+      taxRate: normalizeTaxRate(contract.taxRate, Number(defaults.taxRate)),
+      billingFrequency: normalizeBillingFrequency(contract.billingFrequency, contract.type),
+      visitFrequency: ['Mensuelle', 'Trimestrielle', 'Annuelle'].includes(contract.visitFrequency)
+        ? contract.visitFrequency
+        : 'Trimestrielle',
+    })
+    setReferencePreview('')
+    setReferencePreviewYear('')
+    setReferencePreviewError('')
     setFormError('')
     setFormOpen(true)
   }
@@ -407,14 +523,21 @@ export default function Contracts() {
     const noticeMonths = Number(form.noticeMonths)
     const localClient = clientById.get(form.clientId)
     const localElevators = Array.isArray(localClient?.elevators) ? localClient.elevators : []
-    const localElevator = localElevators.find((elevator, index) =>
-      getElevatorId(elevator, index) === form.elevatorId,
+    const elevatorIds = [...new Set(
+      (Array.isArray(form.elevatorIds) ? form.elevatorIds : form.elevatorId ? [form.elevatorId] : [])
+        .map(String),
+    )]
+    const localElevatorsById = new Map(
+      localElevators.map((elevator, index) => [getElevatorId(elevator, index), elevator]),
     )
+    const selectedLocalElevators = elevatorIds
+      .map((id) => ({ id, elevator: localElevatorsById.get(id) }))
+      .filter(({ elevator }) => Boolean(elevator))
     const valid =
       CONTRACT_TYPES.includes(type) &&
       Boolean(localClient) &&
-      Boolean(localElevator) &&
-      Boolean(String(form.reference || '').trim()) &&
+      elevatorIds.length > 0 &&
+      selectedLocalElevators.length === elevatorIds.length &&
       Boolean(String(form.subject || '').trim()) &&
       Boolean(String(form.scope || '').trim()) &&
       Boolean(String(form.paymentTerms || '').trim()) &&
@@ -425,9 +548,10 @@ export default function Contracts() {
       price.valid &&
       TAX_RATES.includes(taxRate) &&
       SLA_OPTIONS.includes(form.slaResponseTime) &&
+      ['Mensuelle', 'Trimestrielle', 'Annuelle'].includes(form.visitFrequency) &&
       BILLING_FREQUENCIES.includes(form.billingFrequency) &&
       ['simple', 'complete'].includes(form.version) &&
-      ['Brouillon', 'À signer', 'Actif', 'Terminé', 'Résilié'].includes(form.status) &&
+      ['Brouillon', 'En négociation', 'À signer', 'Actif', 'Terminé', 'Résilié'].includes(form.status) &&
       Number.isInteger(noticeMonths) &&
       noticeMonths >= 0 &&
       noticeMonths <= 24
@@ -435,8 +559,8 @@ export default function Contracts() {
     if (!valid) {
       const message = !localClient
         ? 'Sélectionnez un client enregistré.'
-        : !localElevator
-          ? 'Sélectionnez un ascenseur appartenant au parc du client choisi.'
+        : elevatorIds.length === 0 || selectedLocalElevators.length !== elevatorIds.length
+          ? 'Sélectionnez au moins un ascenseur appartenant au parc du client choisi.'
           : price.error
             ? `Montant ou calcul financier invalide : ${price.error}`
             : 'Vérifiez les champs obligatoires, les dates, le montant, la TVA, le SLA, l’échéancier et le préavis (0 à 24 mois).'
@@ -445,11 +569,13 @@ export default function Contracts() {
     }
 
     setSaving(true)
-    const contractReference = form.reference.trim()
     const contractRef = editingId
       ? doc(db, 'contracts', editingId)
       : doc(collection(db, 'contracts'))
     const clientRef = doc(db, 'clients', form.clientId)
+    const contractYear = form.startDate.slice(0, 4)
+    const counterRef = doc(db, 'salesCounters', getContractCounterId(contractYear))
+    const contractPrefix = String(companySettings.contractPrefix || 'CT').trim().toUpperCase() || 'CT'
 
     try {
       await runTransaction(db, async (transaction) => {
@@ -458,35 +584,55 @@ export default function Contracts() {
           throw new Error('Le client sélectionné n’existe plus. Actualisez la liste et réessayez.')
         }
 
+        const existingSnapshot = editingId ? await transaction.get(contractRef) : null
+        if (existingSnapshot && !existingSnapshot.exists()) {
+          throw new Error('Ce contrat n’existe plus. Actualisez la liste et réessayez.')
+        }
         const latestClient = { ...clientSnapshot.data(), id: clientSnapshot.id }
         const latestElevators = Array.isArray(latestClient.elevators) ? latestClient.elevators : []
-        const latestElevator = latestElevators.find((elevator, index) =>
-          getElevatorId(elevator, index) === form.elevatorId,
+        const latestElevatorsById = new Map(
+          latestElevators.map((elevator, index) => [getElevatorId(elevator, index), elevator]),
         )
-        if (!latestElevator) {
-          throw new Error('Cet ascenseur ne figure plus dans le parc du client. Sélectionnez un équipement à jour.')
+        const latestSelectedElevators = elevatorIds.map((id) => ({
+          id,
+          elevator: latestElevatorsById.get(id),
+        }))
+        if (latestSelectedElevators.some(({ elevator }) => !elevator)) {
+          throw new Error('Un ou plusieurs ascenseurs ne figurent plus dans le parc du client. Actualisez la sélection.')
         }
 
-        const elevatorSnapshot = {
-          id: form.elevatorId,
-          reference: latestElevator.reference || '',
-          brand: latestElevator.brand || '',
-          type: latestElevator.type || '',
+        const elevatorSnapshots = latestSelectedElevators.map(({ id, elevator }) => ({
+          id,
+          reference: elevator.reference || '',
+          brand: elevator.brand || '',
+          type: elevator.type || '',
+          levels: elevator.levels || elevator.floors || '',
+        }))
+        const existingReference = String(existingSnapshot?.data()?.reference || '').trim()
+        let contractReference = existingReference || String(form.reference || '').trim()
+        let counterSnapshot = null
+        let nextNumber = null
+        if (!contractReference) {
+          counterSnapshot = await transaction.get(counterRef)
+          nextNumber = (Number(counterSnapshot.data()?.lastNumber) || 0) + 1
+          contractReference = `${contractPrefix}-${contractYear}-${String(nextNumber).padStart(3, '0')}`
         }
+
         const contractData = {
           reference: contractReference,
           type,
           version: form.version,
+          renewedFromContractId: String(form.renewedFromContractId || ''),
           clientId: latestClient.id,
           clientName: getClientName(latestClient),
           clientAddress: latestClient.address || '',
           clientIce: latestClient.ice || '',
-          elevatorId: form.elevatorId,
-          elevatorIds: [form.elevatorId],
-          elevatorReference: elevatorSnapshot.reference,
-          elevatorBrand: elevatorSnapshot.brand,
-          elevatorType: elevatorSnapshot.type,
-          elevators: [elevatorSnapshot],
+          elevatorId: elevatorSnapshots[0].id,
+          elevatorIds: elevatorSnapshots.map((elevator) => elevator.id),
+          elevatorReference: elevatorSnapshots[0].reference,
+          elevatorBrand: elevatorSnapshots[0].brand,
+          elevatorType: elevatorSnapshots[0].type,
+          elevators: elevatorSnapshots,
           subject: form.subject.trim(),
           siteAddress: String(form.siteAddress || '').trim() || latestClient.address || '',
           startDate: form.startDate,
@@ -498,6 +644,7 @@ export default function Contracts() {
           warranty: String(form.warranty || '').trim(),
           responseTime: form.slaResponseTime,
           slaResponseTime: form.slaResponseTime,
+          visitFrequency: form.visitFrequency,
           billingFrequency: form.billingFrequency,
           autoRenewal: form.autoRenewal === true,
           noticeMonths,
@@ -517,6 +664,14 @@ export default function Contracts() {
             ...contractData,
             createdAt: serverTimestamp(),
           })
+        }
+
+        if (counterSnapshot && nextNumber !== null) {
+          if (counterSnapshot.exists()) {
+            transaction.update(counterRef, { lastNumber: nextNumber, updatedAt: serverTimestamp() })
+          } else {
+            transaction.set(counterRef, { lastNumber: nextNumber, updatedAt: serverTimestamp() })
+          }
         }
       })
 
@@ -625,7 +780,11 @@ export default function Contracts() {
     }
   }, [pdfRequest])
 
-  const hasFilters = Boolean(query || typeFilter || statusFilter)
+  const formYear = String(form.startDate || '').slice(0, 4)
+  const numberPreviewLoading = Boolean(
+    formOpen && !form.reference && /^\d{4}$/.test(formYear) && referencePreviewYear !== formYear,
+  )
+  const hasFilters = Boolean(query || typeFilter || statusFilter || clientFilter)
   const currentError = pageError || contractsError || clientsError
 
   return (
@@ -694,7 +853,7 @@ export default function Contracts() {
               </p>
             </div>
           </div>
-          <div className="grid w-full gap-2 sm:max-w-3xl sm:grid-cols-[minmax(190px,1fr)_170px_190px]">
+          <div className="grid w-full gap-2 sm:max-w-5xl sm:grid-cols-[minmax(190px,1fr)_180px_170px_190px]">
             <label className="relative block">
               <span className="sr-only">Rechercher un contrat</span>
               <Search
@@ -723,7 +882,8 @@ export default function Contracts() {
               value={typeFilter}
             >
               <option value="">Tous les types</option>
-              <option value="intervention">Maintenance</option>
+              <option value="maintenance_preventive">Maintenance préventive</option>
+              <option value="maintenance_complete">Maintenance complète</option>
               <option value="installation">Installation</option>
               <option value="modernisation">Modernisation</option>
             </select>
@@ -739,6 +899,20 @@ export default function Contracts() {
               <option value="">Tous les états</option>
               {Object.keys(statusClass).map((status) => (
                 <option key={status} value={status}>{status}</option>
+              ))}
+            </select>
+            <select
+              aria-label="Filtrer par client"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+              onChange={(event) => {
+                setClientFilter(event.target.value)
+                table.setPage(1)
+              }}
+              value={clientFilter}
+            >
+              <option value="">Tous les clients</option>
+              {clients.map((client) => (
+                <option key={client.id} value={client.id}>{getClientName(client)}</option>
               ))}
             </select>
           </div>
@@ -759,7 +933,7 @@ export default function Contracts() {
         )}
 
         {loading ? (
-          <TableSkeleton columns={7} minWidth={1050} />
+          <TableSkeleton columns={10} minWidth={1270} />
         ) : filteredContracts.length === 0 ? (
           <EmptyState
             actionLabel={hasFilters ? 'Effacer les filtres' : clients.length > 0 ? 'Créer un contrat' : 'Créer un client'}
@@ -778,14 +952,16 @@ export default function Contracts() {
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1050px] text-left">
+            <table className="w-full min-w-[1270px] text-left">
               <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 <tr>
                   <SortableTableHeader className="px-5 py-3.5" columnKey="reference" label="N° Contrat" {...table} />
                   <SortableTableHeader className="px-5 py-3.5" columnKey="__clientName" label="Client" {...table} />
                   <SortableTableHeader className="px-5 py-3.5" columnKey="__elevatorLabel" label="Ascenseur(s)" {...table} />
                   <SortableTableHeader className="px-5 py-3.5" columnKey="__typeLabel" label="Type" {...table} />
+                  <SortableTableHeader className="px-5 py-3.5" columnKey="startDate" label="Date début" {...table} />
                   <SortableTableHeader className="px-5 py-3.5" columnKey="endDate" label="Date de fin" {...table} />
+                  <SortableTableHeader className="px-5 py-3.5" columnKey="__amountHT" label="Montant HT" {...table} />
                   <SortableTableHeader className="px-5 py-3.5" columnKey="__amountTTC" label="Montant TTC" {...table} />
                   <SortableTableHeader className="px-5 py-3.5" columnKey="__contractStatus" label="Statut" {...table} />
                   <th className="px-5 py-3.5 text-right">Actions</th>
@@ -794,16 +970,13 @@ export default function Contracts() {
               <tbody className="divide-y divide-slate-100">
                 {table.pageItems.map((contract) => {
                   const StatusIcon = getStatusIcon(contract.__contractStatus)
-                  const animatedStatus = ['Expiré', 'Bientôt à terme', 'Préavis de renouvellement']
+                  const animatedStatus = ['Expiré', 'Bientôt à terme', 'Préavis de renouvellement', 'En négociation']
                     .includes(contract.__contractStatus)
                   return (
                     <tr className="transition hover:bg-blue-50/30" key={contract.id}>
                       <td className="px-5 py-4">
                         <p className="text-sm font-semibold text-slate-900">
                           {contract.reference || 'Sans référence'}
-                        </p>
-                        <p className="mt-1 text-xs text-slate-500">
-                          Début · {formatDate(contract.startDate)}
                         </p>
                       </td>
                       <td className="px-5 py-4 text-sm font-medium text-slate-700">
@@ -814,12 +987,17 @@ export default function Contracts() {
                       </td>
                       <td className="px-5 py-4">
                         <p className="text-sm font-medium text-slate-700">{contract.__typeLabel}</p>
-                        <p className="mt-1 text-xs text-slate-500">
-                          {contract.version === 'complete' ? 'Version complète' : 'Version simple'}
-                        </p>
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
+                        {formatDate(contract.startDate)}
                       </td>
                       <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
                         {formatDate(contract.endDate)}
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-4 text-sm font-medium tabular-nums text-slate-700">
+                        {contract.__amountHT === null
+                          ? '—'
+                          : formatCurrency(contract.__amountHT, companySettings.defaultCurrency)}
                       </td>
                       <td className="whitespace-nowrap px-5 py-4 text-sm font-semibold tabular-nums text-slate-800">
                         {contract.__amountTTC === null
@@ -854,6 +1032,15 @@ export default function Contracts() {
                             type="button"
                           >
                             <FileSpreadsheet aria-hidden="true" size={17} />
+                          </button>
+                          <button
+                            aria-label={`Renouveler le contrat ${contract.reference || ''}`}
+                            className="rounded-lg p-2 text-slate-500 transition hover:bg-emerald-50 hover:text-emerald-800"
+                            onClick={() => renewContract(contract)}
+                            title="Renouveler · créer un nouveau contrat"
+                            type="button"
+                          >
+                            <RefreshCw aria-hidden="true" size={16} />
                           </button>
                           <button
                             aria-label={`Voir ou modifier le contrat ${contract.reference || ''}`}
@@ -892,6 +1079,9 @@ export default function Contracts() {
           contract={form}
           currency={companySettings.defaultCurrency || 'MAD'}
           error={formError}
+          numberPreview={referencePreviewYear === formYear ? referencePreview : ''}
+          numberPreviewError={referencePreviewError}
+          numberPreviewLoading={numberPreviewLoading}
           onCancel={() => {
             if (!saving) setFormOpen(false)
           }}

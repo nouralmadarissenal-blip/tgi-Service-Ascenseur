@@ -6,14 +6,19 @@ import Login from './pages/Login'
 
 const Layout = lazy(() => import('./components/Layout'))
 const Clients = lazy(() => import('./pages/Clients'))
+const ElevatorPark = lazy(() => import('./pages/ElevatorPark'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const Settings = lazy(() => import('./pages/Settings'))
 const Technicians = lazy(() => import('./pages/Technicians'))
 const Interventions = lazy(() => import('./pages/Interventions'))
 const Contracts = lazy(() => import('./pages/Contracts'))
 const Stock = lazy(() => import('./pages/Stock'))
+const PurchaseOrders = lazy(() => import('./pages/PurchaseOrders'))
+const DeliveryNotes = lazy(() => import('./pages/DeliveryNotes'))
 const Sales = lazy(() => import('./pages/Sales'))
-const Recovery = lazy(() => import('./pages/Recovery'))
+const Quotes = lazy(() => import('./pages/Quotes'))
+const Invoices = lazy(() => import('./pages/Invoices'))
+const Collections = lazy(() => import('./pages/Collections'))
 const Profile = lazy(() => import('./pages/Profile'))
 
 const authenticatedRoles = ['Directeur', 'Commercial']
@@ -132,6 +137,14 @@ function AppRoutes() {
           />
           <Route
             element={
+              <ProtectedRoute allowedRoles={['Directeur', 'Commercial']}>
+                <ElevatorPark />
+              </ProtectedRoute>
+            }
+            path="/park"
+          />
+          <Route
+            element={
               <ProtectedRoute allowedRoles={['Directeur']}>
                 <Technicians />
               </ProtectedRoute>
@@ -164,8 +177,16 @@ function AppRoutes() {
           />
           <Route
             element={
+              <ProtectedRoute allowedRoles={['Directeur', 'Commercial']}>
+                <Quotes />
+              </ProtectedRoute>
+            }
+            path="/quotes"
+          />
+          <Route
+            element={
               <ProtectedRoute allowedRoles={['Directeur']}>
-                <Navigate replace to="/sales" />
+                <PurchaseOrders />
               </ProtectedRoute>
             }
             path="/purchase-orders"
@@ -173,7 +194,7 @@ function AppRoutes() {
           <Route
             element={
               <ProtectedRoute allowedRoles={['Directeur']}>
-                <Navigate replace to="/sales" />
+                <DeliveryNotes />
               </ProtectedRoute>
             }
             path="/delivery-notes"
@@ -181,7 +202,7 @@ function AppRoutes() {
           <Route
             element={
               <ProtectedRoute allowedRoles={['Directeur', 'Commercial']}>
-                <Navigate replace to="/sales" />
+                <Invoices />
               </ProtectedRoute>
             }
             path="/invoices"
@@ -197,14 +218,14 @@ function AppRoutes() {
           <Route
             element={
               <ProtectedRoute allowedRoles={['Directeur', 'Commercial']}>
-                <Recovery />
+                <Collections />
               </ProtectedRoute>
             }
             path="/collections"
           />
           <Route
             element={
-              <ProtectedRoute allowedRoles={['Directeur', 'Commercial']}>
+              <ProtectedRoute allowedRoles={['Directeur']}>
                 <Settings />
               </ProtectedRoute>
             }

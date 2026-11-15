@@ -3,14 +3,14 @@ import {
   Building2,
   Check,
   ImagePlus,
-  Landmark,
   LoaderCircle,
+  Palette,
   Save,
-  Settings2,
   ShieldCheck,
   Trash2,
 } from 'lucide-react'
 import { doc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore'
+import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
 
 const DEFAULT_SETTINGS = {
@@ -38,6 +38,11 @@ const DEFAULT_SETTINGS = {
   logoUrl: '/logo.jpeg',
   stampBase64: '',
   autoStampEnabled: false,
+  pdfPrimaryColor: '#4682B4',
+  pdfSecondaryColor: '#1e3a8a',
+  pdfFont: 'Helvetica',
+  pdfLayout: 'classic',
+  pdfWatermark: '',
   documentFooter: '',
   defaultTermsAndConditions: '',
   defaultVatRate: 20,
@@ -50,14 +55,19 @@ const DEFAULT_SETTINGS = {
 }
 
 const TABS = [
-  { id: 'general', label: 'Informations générales', icon: Building2 },
-  { id: 'legal', label: 'Légal & bancaire', icon: Landmark },
+  { id: 'legal', label: 'Informations légales & contact', icon: Building2 },
   { id: 'visual', label: 'Identité visuelle', icon: ImagePlus },
-  { id: 'documents', label: 'Documents & finance', icon: Settings2 },
+  { id: 'documents', label: 'Design des documents PDF', icon: Palette },
 ]
 
 const LEGAL_FORMS = ['SARL', 'SARL AU', 'SA', 'SNC', 'SCS', 'SCA', 'Auto-entrepreneur', 'Autre']
 const CURRENCIES = ['MAD', 'EUR', 'USD']
+const PDF_FONTS = ['Helvetica', 'Arial', 'Times New Roman', 'Roboto']
+const PDF_LAYOUTS = [
+  { value: 'classic', label: 'Classique · Logo à gauche, coordonnées à droite' },
+  { value: 'modern', label: 'Moderne · Bandeau coloré et logo centré' },
+  { value: 'minimal', label: 'Minimaliste · En-tête léger' },
+]
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 const MAX_IMAGE_BYTES = 700 * 1024
 const MAX_IMAGE_DATA_CHARACTERS = 900 * 1024
@@ -101,6 +111,19 @@ function normalizeSettings(savedSettings = {}) {
     logoUrl: stringValue(savedSettings.logoUrl, DEFAULT_SETTINGS.logoUrl),
     stampBase64: stringValue(savedSettings.stampBase64),
     autoStampEnabled: savedSettings.autoStampEnabled === true,
+    pdfPrimaryColor: /^#[0-9A-Fa-f]{6}$/.test(savedSettings.pdfPrimaryColor || '')
+      ? savedSettings.pdfPrimaryColor
+      : DEFAULT_SETTINGS.pdfPrimaryColor,
+    pdfSecondaryColor: /^#[0-9A-Fa-f]{6}$/.test(savedSettings.pdfSecondaryColor || '')
+      ? savedSettings.pdfSecondaryColor
+      : DEFAULT_SETTINGS.pdfSecondaryColor,
+    pdfFont: PDF_FONTS.includes(savedSettings.pdfFont)
+      ? savedSettings.pdfFont
+      : DEFAULT_SETTINGS.pdfFont,
+    pdfLayout: PDF_LAYOUTS.some((layout) => layout.value === savedSettings.pdfLayout)
+      ? savedSettings.pdfLayout
+      : DEFAULT_SETTINGS.pdfLayout,
+    pdfWatermark: stringValue(savedSettings.pdfWatermark),
     documentFooter: stringValue(savedSettings.documentFooter),
     defaultTermsAndConditions: stringValue(savedSettings.defaultTermsAndConditions),
     defaultVatRate: savedSettings.defaultVatRate ?? DEFAULT_SETTINGS.defaultVatRate,
@@ -191,8 +214,9 @@ function isHttpWebsite(value) {
 }
 
 export default function Settings() {
+  const { role } = useAuth()
   const [form, setForm] = useState(DEFAULT_SETTINGS)
-  const [activeTab, setActiveTab] = useState('general')
+  const [activeTab, setActiveTab] = useState('legal')
   const [logoPreview, setLogoPreview] = useState(DEFAULT_SETTINGS.logoUrl)
   const [stampPreview, setStampPreview] = useState('')
   const [readingMedia, setReadingMedia] = useState('')
@@ -315,16 +339,27 @@ export default function Settings() {
     const defaultVatRate = Number(form.defaultVatRate)
     const quoteValidity = Number(form.defaultQuoteValidityMonths)
 
+    if (
+      !/^#[0-9A-Fa-f]{6}$/.test(form.pdfPrimaryColor) ||
+      !/^#[0-9A-Fa-f]{6}$/.test(form.pdfSecondaryColor) ||
+      !PDF_FONTS.includes(form.pdfFont) ||
+      !PDF_LAYOUTS.some((layout) => layout.value === form.pdfLayout) ||
+      String(form.pdfWatermark || '').length > 80
+    ) {
+      setValidationError('Vérifiez les couleurs, la police, la mise en page et le filigrane PDF.', 'documents')
+      return
+    }
+
     if (!companyName || !legalName || !LEGAL_FORMS.includes(legalForm)) {
-      setValidationError('La raison sociale, le nom de l’entreprise et une forme juridique valide sont obligatoires.', 'general')
+      setValidationError('La raison sociale, le nom de l’entreprise et une forme juridique valide sont obligatoires.', 'legal')
       return
     }
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setValidationError('Saisissez une adresse e-mail de contact valide.', 'general')
+      setValidationError('Saisissez une adresse e-mail de contact valide.', 'legal')
       return
     }
     if (website && !isHttpWebsite(website)) {
-      setValidationError('Le site Web doit être une adresse HTTP ou HTTPS valide.', 'general')
+      setValidationError('Le site Web doit être une adresse HTTP ou HTTPS valide.', 'legal')
       return
     }
     if (
@@ -427,6 +462,20 @@ export default function Settings() {
     )
   }
 
+  if (!['SuperAdmin', 'Directeur'].includes(role)) {
+    return (
+      <main className="flex min-h-full items-center justify-center bg-slate-50 px-4 py-12">
+        <section className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-lg">
+          <ShieldCheck aria-hidden="true" className="mx-auto text-red-600" size={30} />
+          <h1 className="mt-4 text-xl font-semibold text-slate-900">Accès non autorisé</h1>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            Seuls le Directeur et le SuperAdmin peuvent consulter ou modifier les paramètres de la société.
+          </p>
+        </section>
+      </main>
+    )
+  }
+
   const activeTabConfig = TABS.find((tab) => tab.id === activeTab) || TABS[0]
   const ActiveTabIcon = activeTabConfig.icon
 
@@ -453,7 +502,7 @@ export default function Settings() {
 
         <form className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg shadow-slate-900/5" onSubmit={saveSettings}>
           <div className="border-b border-slate-200 bg-slate-50/80 p-2 sm:p-3">
-            <div aria-label="Onglets des paramètres société" className="grid gap-1 sm:grid-cols-2 lg:grid-cols-4" role="tablist">
+            <div aria-label="Onglets des paramètres société" className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3" role="tablist">
               {TABS.map(({ id, label, icon: Icon }) => (
                 <button
                   aria-controls="settings-panel"
@@ -500,7 +549,7 @@ export default function Settings() {
               </div>
             </div>
 
-            {activeTabConfig.id === 'general' && (
+            {activeTabConfig.id === 'legal' && (
               <div className="grid gap-x-5 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
                 <TextField
                   form={form}
@@ -742,6 +791,135 @@ export default function Settings() {
 
             {activeTabConfig.id === 'documents' && (
               <div className="space-y-7">
+                <section className="rounded-2xl border border-steel-200 bg-gradient-to-br from-steel-50/80 to-white p-4 sm:p-6">
+                  <div className="mb-5">
+                    <h3 className="text-sm font-bold uppercase tracking-wider text-steel-800">
+                      Apparence des exports PDF
+                    </h3>
+                    <p className="mt-1 text-xs leading-5 text-slate-600">
+                      Ces préférences sont appliquées aux documents exportés par le moteur PDF commun.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {[
+                      { name: 'pdfPrimaryColor', label: 'Couleur principale' },
+                      { name: 'pdfSecondaryColor', label: 'Couleur secondaire' },
+                    ].map(({ name, label }) => (
+                      <label className="block" key={name}>
+                        <span className="mb-1.5 block text-xs font-semibold text-slate-700">{label}</span>
+                        <span className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-2">
+                          <input
+                            aria-label={label}
+                            className="h-10 w-14 cursor-pointer rounded-lg border-0 bg-transparent p-0.5"
+                            id={`company-${name}`}
+                            name={name}
+                            onChange={updateField}
+                            type="color"
+                            value={form[name]}
+                          />
+                          <span className="font-mono text-sm font-semibold uppercase text-slate-700">{form[name]}</span>
+                        </span>
+                      </label>
+                    ))}
+                    <label className="block">
+                      <span className="mb-1.5 block text-xs font-semibold text-slate-700">Police des documents</span>
+                      <select
+                        className={inputClass}
+                        id="company-pdfFont"
+                        name="pdfFont"
+                        onChange={updateField}
+                        value={form.pdfFont}
+                      >
+                        {PDF_FONTS.map((font) => <option key={font} value={font}>{font}</option>)}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="mb-1.5 block text-xs font-semibold text-slate-700">Mise en page</span>
+                      <select
+                        className={inputClass}
+                        id="company-pdfLayout"
+                        name="pdfLayout"
+                        onChange={updateField}
+                        value={form.pdfLayout}
+                      >
+                        {PDF_LAYOUTS.map((layout) => (
+                          <option key={layout.value} value={layout.value}>{layout.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <TextField
+                      className="sm:col-span-2"
+                      form={form}
+                      label="Filigrane · facultatif, 80 caractères maximum"
+                      maxLength={80}
+                      name="pdfWatermark"
+                      onChange={updateField}
+                      placeholder="Ex. CONFIDENTIEL"
+                    />
+                  </div>
+
+                  <div className="mt-5">
+                    <p className="mb-2 text-xs font-semibold text-slate-700">Aperçu du document</p>
+                    <div
+                      className="relative mx-auto max-w-xl overflow-hidden rounded-xl border bg-white p-4 shadow-md sm:p-5"
+                      style={{
+                        borderColor: form.pdfSecondaryColor,
+                        fontFamily: form.pdfFont === 'Times New Roman' ? '"Times New Roman", serif' : form.pdfFont,
+                      }}
+                    >
+                      {form.pdfLayout === 'modern' ? (
+                        <div
+                          className="mb-4 flex min-h-20 flex-col items-center justify-center gap-2 rounded-lg px-4 py-3 text-center text-white"
+                          style={{ backgroundColor: form.pdfPrimaryColor }}
+                        >
+                          {logoPreview && <img alt="" className="max-h-10 max-w-36 object-contain" src={logoPreview} />}
+                          <span className="text-xs font-semibold">{form.companyName || 'TGI Ascenseurs'} · Coordonnées de la société</span>
+                        </div>
+                      ) : (
+                        <div className={`mb-4 flex items-center gap-4 border-b pb-3 ${
+                          form.pdfLayout === 'minimal' ? 'justify-center' : 'justify-between'
+                        }`} style={{ borderColor: form.pdfSecondaryColor }}>
+                          {form.pdfLayout === 'classic' && logoPreview && (
+                            <img alt="" className="max-h-10 max-w-36 object-contain" src={logoPreview} />
+                          )}
+                          <div className={form.pdfLayout === 'minimal' ? 'text-center' : 'text-right'}>
+                            <p className="text-sm font-bold" style={{ color: form.pdfPrimaryColor }}>
+                              {form.companyName || 'TGI Ascenseurs'}
+                            </p>
+                            <p className="mt-1 text-[10px] text-slate-500">Adresse · Téléphone · ICE</p>
+                          </div>
+                          {form.pdfLayout === 'minimal' && logoPreview && (
+                            <img alt="" className="max-h-8 max-w-28 object-contain" src={logoPreview} />
+                          )}
+                        </div>
+                      )}
+                      <h4 className="text-xs font-bold uppercase" style={{ color: form.pdfPrimaryColor }}>
+                        Exemple de document PDF
+                      </h4>
+                      <div className="mt-3 overflow-hidden rounded border" style={{ borderColor: form.pdfSecondaryColor }}>
+                        <div className="px-3 py-2 text-[10px] font-semibold text-white" style={{ backgroundColor: form.pdfPrimaryColor }}>
+                          En-tête de tableau · Désignation · Montant
+                        </div>
+                        <div className="px-3 py-2 text-[10px] text-slate-600">Ligne de document · 1 250,00 MAD</div>
+                      </div>
+                      {form.pdfWatermark.trim() && (
+                        <span
+                          aria-hidden="true"
+                          className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 -rotate-12 whitespace-nowrap text-2xl font-black tracking-widest text-slate-300/40"
+                        >
+                          {form.pdfWatermark}
+                        </span>
+                      )}
+                      {form.documentFooter && (
+                        <p className="mt-4 border-t pt-2 text-center text-[9px] text-slate-500" style={{ borderColor: form.pdfSecondaryColor }}>
+                          {form.documentFooter}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </section>
+
                 <section>
                   <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-slate-500">
                     Calculs et préférences financières
@@ -842,7 +1020,7 @@ export default function Settings() {
           <footer className="flex flex-col gap-4 border-t border-slate-200 bg-slate-50/80 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-8">
             <p className="flex items-center gap-2 text-xs font-medium text-slate-500">
               <ShieldCheck aria-hidden="true" className="text-emerald-600" size={16} />
-              Configuration accessible aux rôles administratifs
+              Accès réservé au Directeur et au SuperAdmin
             </p>
             <button
               className="inline-flex min-w-48 items-center justify-center gap-2 rounded-xl bg-steel-700 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-steel-800 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-steel-100 disabled:cursor-not-allowed disabled:opacity-60"
@@ -852,7 +1030,7 @@ export default function Settings() {
               {saving
                 ? <LoaderCircle aria-hidden="true" className="animate-spin" size={17} />
                 : <Save aria-hidden="true" size={17} />}
-              {saving ? 'Enregistrement…' : 'Enregistrer les modifications'}
+              {saving ? 'Enregistrement…' : 'Sauvegarder les paramètres'}
             </button>
           </footer>
         </form>

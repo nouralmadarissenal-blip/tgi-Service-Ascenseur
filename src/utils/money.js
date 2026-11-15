@@ -1,4 +1,4 @@
-function toCents(value) {
+export function toCents(value) {
   const amount = Number(value)
   if (!Number.isFinite(amount)) {
     throw new TypeError('Un montant numérique valide est requis.')

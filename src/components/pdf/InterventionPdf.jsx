@@ -69,15 +69,26 @@ function BorderedPanel({ title, children, style = {} }) {
 }
 
 const InterventionPdf = forwardRef(function InterventionPdf(
-  { client = {}, company = {}, intervention = {}, technician = {} },
+  { client = {}, company = {}, intervention = {}, technician = {}, technicians = [] },
   ref,
 ) {
   const date = formatDate(
     intervention.scheduledDate || intervention.scheduledAt || intervention.date,
   )
   const scheduledAt = String(intervention.scheduledAt || '')
-  const arrivalTime =
-    intervention.arrivalTime || (scheduledAt.includes('T') ? scheduledAt.slice(11, 16) : '')
+  const scheduledTime =
+    intervention.scheduledTime ||
+    (scheduledAt.includes('T') ? scheduledAt.slice(11, 16) : '') ||
+    intervention.arrivalTime ||
+    ''
+  const actualStartTime =
+    intervention.actualStartTime ||
+    (intervention.scheduledTime ? intervention.arrivalTime : '') ||
+    ''
+  const actualEndTime =
+    intervention.actualEndTime ||
+    intervention.departureTime ||
+    ''
   const parts = Array.isArray(intervention.replacedParts)
     ? intervention.replacedParts
     : Array.isArray(intervention.parts)
@@ -88,7 +99,13 @@ const InterventionPdf = forwardRef(function InterventionPdf(
       ? intervention.replacedParts
       : intervention.replacedPartsText || ''
   const clientName = getClientName(client, intervention)
-  const technicianName = getTechnicianName(technician, intervention)
+  const assignedTechnicianNames = Array.isArray(intervention.technicianNames) &&
+      intervention.technicianNames.length
+    ? intervention.technicianNames
+    : technicians.map((assignedTechnician) => getTechnicianName(assignedTechnician, {}))
+  const technicianName = assignedTechnicianNames.length
+    ? assignedTechnicianNames.join(', ')
+    : getTechnicianName(technician, intervention)
   const clientAddress = [
     client.address || intervention.clientAddress,
     client.city,
@@ -119,7 +136,7 @@ const InterventionPdf = forwardRef(function InterventionPdf(
             RAPPORT D’INTERVENTION
           </p>
           <h1 style={{ margin: 0, color: '#0f172a', fontSize: '17pt', lineHeight: 1.2 }}>
-            BON DE TRAVAIL N° {intervention.reference || '—'}
+            BON D’INTERVENTION N° {intervention.reference || '—'}
           </h1>
           <p style={{ margin: '1mm 0 0', color: '#64748b', fontSize: '8pt' }}>
             Fiche d’intervention · {intervention.status || 'Planifiée'}
@@ -143,18 +160,20 @@ const InterventionPdf = forwardRef(function InterventionPdf(
 
       <BorderedPanel title="2 · INTERVENANT & PLANIFICATION">
         <InfoRows rows={[
-          ['Technicien affecté', technicianName],
+          ['Technicien(s) affecté(s)', technicianName],
           ['Spécialité', technician.specialty],
           ['CIN', technician.cin],
           ['Date prévue', date],
-          ['Heure d’arrivée', arrivalTime],
-          ['Heure de départ', intervention.departureTime],
+          ['Heure prévue', scheduledTime],
+          ['Début réel', actualStartTime],
+          ['Fin réelle', actualEndTime],
         ]} />
       </BorderedPanel>
 
       <BorderedPanel title="3 · DIAGNOSTIC & TRAVAUX">
         <InfoRows rows={[
           ['Nature de la mission', intervention.type || intervention.title],
+          ['Niveau d’urgence', intervention.priority || intervention.urgency],
           ['Panne / symptômes', intervention.description || intervention.notes],
           ['Travaux réalisés / résolution', intervention.actionsPerformed || intervention.workPerformed],
           ['Statut de clôture', intervention.status],
@@ -219,7 +238,7 @@ const InterventionPdf = forwardRef(function InterventionPdf(
           <strong style={{ color: '#1e3a8a', fontSize: '9pt' }}>Signature du Technicien</strong>
           <p style={{ margin: '3mm 0 0', color: '#475569', fontSize: '8pt' }}>{technicianName}</p>
           <p style={{ margin: '1mm 0 0', color: '#64748b', fontSize: '7.5pt' }}>
-            Date : {date} · Arrivée : {arrivalTime || '—'} · Départ : {intervention.departureTime || '—'}
+            Date : {date} · Début : {actualStartTime || '—'} · Fin : {actualEndTime || '—'}
           </p>
           <div style={{ marginTop: '18mm', borderTop: '1px solid #cbd5e1' }} />
         </div>
@@ -239,7 +258,7 @@ const InterventionPdf = forwardRef(function InterventionPdf(
               fontWeight: 700,
             }}
           >
-            Cachet et Signature du Client
+            Signature du Client
             <p style={{ margin: '2mm 0 0', color: '#64748b', fontSize: '7.5pt', fontWeight: 400 }}>
               Nom : {clientName}
             </p>

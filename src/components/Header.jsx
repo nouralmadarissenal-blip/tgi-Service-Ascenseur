@@ -29,6 +29,7 @@ export default function Header({ displayName, onMenuOpen, role, user }) {
           className="border-slate-300/30 ring-blue-400/40"
           email={user?.email}
           name={displayName}
+          role={role}
           size="sm"
         />
       </div>

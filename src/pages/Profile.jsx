@@ -36,6 +36,7 @@ export default function Profile() {
               className="border-white/80 ring-white/40"
               email={user?.email}
               name={name}
+              role={role}
               size="lg"
             />
             <div className="min-w-0">
